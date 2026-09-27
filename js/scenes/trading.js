@@ -731,13 +731,13 @@ export default class TradingScene extends Scene {
         animate: this.chartAnim,
       });
 
-      // 区间统计
+      // 区间统计（报真实收盘价的极值）
       const statY = chartTop + chartH + 22;
-      text(`最高 ¥${maxV.toFixed(2)}`, r.x + 14, statY, {
+      text(`最高 ¥${hiClose.toFixed(2)}`, r.x + 14, statY, {
         size: FONT.size.xs,
         color: STOCK.up,
       });
-      text(`最低 ¥${minV.toFixed(2)}`, r.x + r.w - 14, statY, {
+      text(`最低 ¥${loClose.toFixed(2)}`, r.x + r.w - 14, statY, {
         size: FONT.size.xs,
         color: STOCK.down,
         align: 'right',

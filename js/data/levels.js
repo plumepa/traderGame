@@ -42,8 +42,15 @@
  *   style     兼容字段 = pool[0]（旧代码/composeGame 的 style 兜底）
  *   pool      本关可抽的年景风格集合
  *   turns     回合数
- *   initCash  初始资金
+ *   initCash  ★ **第 1 关**的初始资金。
+ *             连闯时后续关卡的钱来自上一关期末资产（DataBus.startNextLevel
+ *             把 result.total 当 initCash 传下去），这个字段**不再**代表
+ *             本关的本金 —— 所以结算页显示的是 bus.initCash，不是 level.initCash。
  *   goal      目标（无硬性通关目标，到期结算）
+ *
+ * ⚠️ LEVELS 是**共享对象数组**，任何关卡代码都不得改写 level.initCash
+ *   （曾经有版本把连闯资金写回 level.initCash，导致第 1 关的本金被永久污染，
+ *    重开一轮时起始资金变成了上一轮的期末资产）。资金一律走 DataBus.initCash。
  */
 
 export const LEVELS = [

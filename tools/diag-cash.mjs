@@ -113,25 +113,33 @@ console.log('\n=== 4. 持有股票时到期（验证平仓真的执行）===\n')
   const bus = new DataBus();
   bus.start('lv_01');
 
-  // 第 1 回合买一手，然后一路持有到年底
+  // ⚠️ 为什么"先空仓跑到最后一个月，再买入"？
+  //
+  // 原先的写法是第 1 回合就买、然后一路持有到年底。但中途**可能撞上退市**：
+  // 退市会把持仓强制清算掉，于是年底已经无仓可平，`liq.details` 为空，
+  // "到期时执行了平仓"就会随机变红 —— 同一份代码时而全绿时而报错。
+  // 把买入挪到最后一回合之后，中间不再有 settle/退市插队，
+  // 这条断言就变成了确定性成立的。
   let guard = 0;
-  let bought = false;
-  while (bus.phase !== 'OVER' && guard++ < 20) {
+  while (!bus.isTermOver() && guard++ < 30) {
     bus.nextTurn();
-
-    if (!bought) {
-      const c = bus.stockDefs
-        .map((d) => ({ code: d.code, price: bus.priceMap[d.code] }))
-        .sort((a, b) => a.price - b.price)[0];
-      if (maxLots(c.price, bus.portfolio.cash) >= 1) {
-        bus.portfolio.buy(c.code, c.price, LOT_SIZE);
-        bought = true;
-      }
-    }
-
     bus.settle();
-    if (bus.isTermOver()) { bus.settleTerm(); break; }
     if (bus.isBankrupt()) { bus.finish('bankrupt', 'b'); break; }
+  }
+
+  let bought = false;
+  if (bus.phase !== 'OVER') {
+    // 只挑没退市的（退市股买不得），再取最便宜的一只
+    const c = bus.stockDefs
+      .filter((d) => !bus.isDelisted(d.code))
+      .map((d) => ({ code: d.code, price: bus.priceMap[d.code] }))
+      .sort((a, b) => a.price - b.price)[0];
+
+    if (c && maxLots(c.price, bus.portfolio.cash) >= 1) {
+      bus.portfolio.buy(c.code, c.price, LOT_SIZE);
+      bought = true;
+    }
+    bus.settleTerm();
   }
 
   const res = bus.result;

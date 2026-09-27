@@ -5,7 +5,13 @@
  * 菜单只显示「第 N 关」与一段氛围文案，年份与市场风格
  * （牛/熊/震荡）都是内部信息 —— 玩家必须自己从价格与新闻里判断。
  *
- * 股票与新闻同样每局随机（由 DataBus.start → composeGame 抽取）。
+ * 第四版（连闯）：菜单选的是**起点**，不是终点。
+ *   从这里进游戏 = 开一轮连闯（DataBus.startRun），
+ *   打完一关可以选择继续下一关（资金延续）或收手结算。
+ *   所以说明文案里必须写明"每关结束：继续下一关 / 收手结算"。
+ *
+ * 股票与新闻每关随机（由 DataBus.start → composeFreshLevel 抽取），
+ * 且连闯期间不重样。
  *
  * 版面（第二版）：
  *   ① 顶部让出安全区 —— 标题从 contentTop() 之下开始，不会被灵动岛遮住
@@ -216,15 +222,19 @@ export default class MenuScene extends Scene {
     }
 
     // ---- 说明 ----
-    text(`初始资金 ¥${level.initCash} · 交易 ${level.turns} 个月后结算`, px, flow.infoY1, {
+    //
+    // ⚠️ 这三行必须说清"连闯"：每关结束都要做一次"继续 / 收手"的选择，
+    //   而且资金是延续的。不写清楚，玩家会在第 1 关结束时愣住 ——
+    //   "怎么还有下一关？我的钱还在吗？"
+    text(`本金 ¥${level.initCash} · 每关 ${level.turns} 个月结算`, px, flow.infoY1, {
       size: FONT.size.xs,
       color: PALETTE.accent,
     });
-    text('每局随机抽出 3 只不同行业的股票', px, flow.infoY2, {
+    text(`从第 ${level.index} 关开始 · 每关 3 只不重样的股票`, px, flow.infoY2, {
       size: FONT.size.xs,
       color: PALETTE.textDim,
     });
-    text('新闻真假难辨 · 看清消息与股票是否相关', px, flow.infoY3, {
+    text('每关结束：继续下一关 / 收手结算', px, flow.infoY3, {
       size: FONT.size.xs,
       color: PALETTE.textDim,
     });
@@ -239,7 +249,7 @@ export default class MenuScene extends Scene {
     });
 
     if (Math.floor(this.blink / 600) % 2 === 0) {
-      text('点击按钮开始你的一年', cx, b.y + b.h + 26, {
+      text(`点击按钮，从第 ${level.index} 关开始`, cx, b.y + b.h + 26, {
         size: FONT.size.xs,
         color: PALETTE.textDim,
         align: 'center',

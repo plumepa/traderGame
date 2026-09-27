@@ -302,6 +302,12 @@ export const STOCK_POOL = [
     profile: { trend: 0.25, vol: 1.6, luck: -0.5 },
     personality: '养殖：猪周期之王，也是猪周期唯一的祭品',
   },
+  {
+    code: '901103', name: '沃丰饲料', sector: 'agriculture',
+    basePrice: 14, floor: 5,
+    profile: { trend: 0.2, vol: 0.95, luck: 0.35 },
+    personality: '饲料加工：不赌猪价、只赚加工费，波动全行业最小',
+  },
 
   // ---------- 传媒 media ----------
   {
@@ -315,6 +321,12 @@ export const STOCK_POOL = [
     basePrice: 24, floor: 7,
     profile: { trend: 0.5, vol: 1.35, luck: 0.05 },
     personality: '游戏公司：版号就是生命线，爆款与监管轮流坐庄',
+  },
+  {
+    code: '901203', name: '翰墨出版', sector: 'media',
+    basePrice: 9, floor: 3,
+    profile: { trend: 0.15, vol: 0.8, luck: 0.4 },
+    personality: '教材出版：现金流稳、增长慢，牛市里最没人看的那种',
   },
 ];
 

@@ -12,6 +12,12 @@
  *   玩家观感就是"关卡提前结束了"。
  *   到期结算只在玩家点"结束本年 ▶ 结算"（_advanceTurn）时触发。
  *
+ * 关卡流转（连闯）：
+ *   菜单 startGame → startRun(levelId)    资金 = 该关默认初始资金
+ *   结算 nextLevel → startNextLevel()     资金 = 上一关期末资产（延续）
+ *   结算 final     → finalSettle()        汇总整轮战绩，runMode 关闭
+ *   结算 menu      → reset() → 主菜单      放弃本轮
+ *
  * 破产判定口径：总资产（现金 + 持仓市值）< 最低一手成本。
  *   - 买入后不判（只是把钱换成股票，总资产几乎不变，给玩家整月调整）
  *   - 卖出后判
@@ -20,6 +26,9 @@
 
 import DataBus from './core/databus';
 import Renderer from './core/render';
+import * as audio from './core/audio';
+import * as bgm from './core/bgm';
+import * as muteButton from './ui/mute-button';
 import MenuScene from './scenes/menu';
 import TradingScene from './scenes/trading';
 import NewsFlashScene from './scenes/newsflash';
@@ -49,6 +58,11 @@ export default class Main {
 
     this.current = null;
 
+    // 音频：先起音效池与全局开关，再起背景音乐
+    // （bgm 的初始音量取决于开关状态，所以顺序不能反）
+    audio.init();
+    bgm.init();
+
     this._bindEvents();
     this._bindTouch();
 
@@ -59,9 +73,9 @@ export default class Main {
   // ============ 事件绑定 ============
 
   _bindEvents() {
-    // 菜单 → 开局
+    // 菜单 → 开局（连闯第 1 关，资金取关卡默认初始资金）
     this.menu.on('startGame', (levelId) => {
-      if (this.bus.start(levelId)) {
+      if (this.bus.startRun(levelId)) {
         // 开局即进入第 1 月
         this._beginTurn();
       } else {
@@ -89,19 +103,59 @@ export default class Main {
       this._enterTrading();
     });
 
-    // 结算 → 重开
-    this.result.on('restart', () => {
+    // ---- 结算场景的三个出口（见 result.js 的 actionsOf）----
+
+    // ① 进入下一关 —— **资金延续上一关的期末资产**
+    //
+    //    settleTerm() 已强制平仓，所以上一关期末是纯现金，
+    //    startNextLevel() 直接把它当下一关的 initCash，不需要搬运持仓。
+    this.result.on('nextLevel', () => {
+      if (this.bus.startNextLevel()) {
+        this._beginTurn();
+      } else {
+        console.error('进入下一关失败：', this.bus.errors);
+      }
+    });
+
+    // ② 返回主界面 —— 放弃本轮连闯，进度清零
+    this.result.on('menu', () => {
       this.bus.reset();
       this.switchTo('menu');
+    });
+
+    // ③ 退市结算 —— 轮末主动收手，把整轮战绩汇总成一份结算单
+    //
+    //    finalSettle() 会把 runMode 关掉，于是按钮只剩"返回主界面"，
+    //    所以这里可以放心地重新进入 result（enter() 会强制重算布局）。
+    this.result.on('final', () => {
+      // 兜底：没有战绩就汇总不出东西。若不处理，结算页会原样重画，
+      // 按钮还是"继续 / 退市结算" —— 点下去没有任何变化，看起来像卡死。
+      if (!this.bus.finalSettle()) {
+        this.bus.reset();
+        this.switchTo('menu');
+        return;
+      }
+      this.switchTo('result');
     });
   }
 
   _bindTouch() {
     wx.onTouchStart((e) => {
+      // iOS 上首次用户交互前音频可能被系统拦下，这里兜一次"确保在播"
+      bgm.ensurePlaying();
+
       const t = e.touches && e.touches[0];
       if (!t) return;
+
+      // 声音开关是全局覆盖层，优先级高于任何场景
+      const w = this.renderer.width;
+      const h = this.renderer.height;
+      if (muteButton.handleTap(t.clientX, t.clientY, w, h)) return;
+
       if (this.current) {
-        this.current.handleTouch(t.clientX, t.clientY);
+        // ★ 只在**真的命中了可点区域**时才响 —— 点空白处不该有反馈音
+        const hit = this.current.handleTouch(t.clientX, t.clientY);
+        if (hit) audio.playClick();
       }
     });
   }
@@ -209,5 +263,8 @@ export default class Main {
       this.current.ensureLayout(w, h);
       this.current.render(this.ctx, w, h);
     }
+
+    // 声音开关画在所有场景之上 —— 它是全局控件，不属于任何一个场景
+    muteButton.draw(this.ctx, w, h);
   }
 }

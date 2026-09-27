@@ -85,6 +85,136 @@ export function pickStocks(n = 3, opts = {}) {
 }
 
 /**
+ * 由「股票列表 + 风格」构造股票定义（含价格路径与退市判定）
+ *
+ * ★ 抽出来是因为这段逻辑在文件里原本**抄了 3 遍**，
+ *   而且抄漏了一处 —— 旧的兜底路径（路径 3）**没有做"一局最多一只退市"的保底**，
+ *   于是那条路上可能出现三只同时爆雷把玩家直接打死。
+ *   合并成一个函数之后，四条路径的行为才真正一致。
+ *
+ * @param {Array} stocks 股票定义数组
+ * @param {string} style 市场风格
+ * @param {string} seedKey 随机种子键（同局同股恒定 → 走势图不会变）
+ * @param {number} turns 回合数
+ * @returns {Array} 带 path / delistAt / delistPrice 的股票定义
+ */
+function buildDefs(stocks, style, seedKey, turns) {
+  const defs = stocks.map((s) => {
+    const path = generatePath(s, style, seedKey, turns);
+    const def = { ...s, path };
+
+    const dl = rollDelist(s, style, seedKey, turns);
+    if (dl) {
+      def.delistAt = dl.delistAt;
+      def.delistPrice = dl.delistPrice;
+    }
+    return def;
+  });
+
+  // 保底：一局最多一只股票退市（避免三只全爆雷把玩家直接打死）
+  const delistable = defs.filter((d) => d.delistAt);
+  if (delistable.length > 1) {
+    const keeper = delistable.reduce((a, b) =>
+      (a.profile.luck || 0) <= (b.profile.luck || 0) ? a : b);
+    defs.forEach((d) => {
+      if (d.delistAt && d !== keeper) {
+        delete d.delistAt;
+        delete d.delistPrice;
+      }
+    });
+  }
+
+  return defs;
+}
+
+/**
+ * ★★ 构造一关 —— **跨关股票不重复**的编排入口
+ *
+ * ============================================================
+ * 为什么需要这个函数（与 composeFromSeason 的区别）
+ * ============================================================
+ *
+ * `composeFromSeason` 用「年景」开局：年景自带 3 只固定股票 + 6 条专属新闻。
+ * 问题在于**年景之间大量共用股票**：36 只股票撑起 20 个年景（60 个股票位），
+ * 平均每只股票出现在 1.7 个年景里，最多的出现 4 次。
+ * 于是"跨关不重复"如果只做在**年景**层面，玩家照样会在第 3 关看到第 1 关的股票。
+ *
+ * 实测：要求"年景的三只股票全部未被用过"时，贪心只能撑 **约 7 关**
+ * （2000 次模拟：6 关 17% / 7 关 51% / 8 关 32%）。
+ * 而"五关一轮、可以一直继续"需要几十关 —— 年景这条路根本走不通。
+ *
+ * 所以本函数**直接从股票池抽股**：
+ *   ① 从 STOCK_POOL 里剔除 excludeStocks（本局/本轮已用过的代码）
+ *   ② 抽 3 只**行业互不相同**的股票
+ *   ③ 风格在关卡允许的风格池里随机（不是取 pool[0]，见下方 ⚠️）
+ *   ④ 新闻按这三只股票的实际行业生成（buildNewsDeck 本就是按 sector 匹配的）
+ *
+ * 这样「每关不重复同一只股票」是**构造性保证**，不靠概率。
+ *
+ * ============================================================
+ * ⚠️ 为什么必须显式处理"风格池随机"
+ * ============================================================
+ * 关卡同时带 `style`（占位单值）与 `pool`（风格集合）。
+ * 如果直接写 `style = opts.style`，占位值会把"全放开"压成单一风格 ——
+ * 这个坑在 composeGame 里已经踩过一次（lv_05 的 400 次抽卡全是 flat）。
+ * 所以这里**只认 styles 数组**，opts.style 仅在没有数组时兜底。
+ *
+ * @param {object} opts
+ * @param {number} [opts.turns=12] 回合数
+ * @param {number} [opts.initCash=10000] 本关起始资金（跑关时是上一关的期末资产）
+ * @param {string[]|'all'} [opts.styles] 本关可抽的风格池
+ * @param {string} [opts.style] 兜底单值（仅当没有 styles 数组时使用）
+ * @param {string[]} [opts.excludeStocks] **必须排除**的股票代码（跨关不重复）
+ * @param {string} [opts.seedKey]
+ * @returns {object} 与 composeFromSeason 同构的一局配置
+ */
+export function composeFreshLevel(opts = {}) {
+  const turns = opts.turns || 12;
+  const initCash = typeof opts.initCash === 'number' ? opts.initCash : 10000;
+  const seedKey = opts.seedKey || `g${Date.now()}_${Math.floor(random() * 1e6)}`;
+
+  // ---- ① 风格：池内随机 ----
+  let styles = null;
+  if (Array.isArray(opts.styles) && opts.styles.length) styles = opts.styles.slice();
+  else if (opts.styles === 'all') styles = MARKET_STYLE_KEYS.slice();
+  else if (opts.style) styles = [opts.style];
+  else styles = MARKET_STYLE_KEYS.slice();
+  const style = styles[Math.floor(random() * styles.length)];
+
+  // ---- ② 股票：排除已用 + 行业互不相同 ----
+  //
+  // ⚠️ 池子被掏空（可用 < 3 只）时**不能**返回不足 3 只 ——
+  //   那正是玩家说的"最后一关只剩 1-2 只股票"。
+  //   这里兜底为"清空排除集重新抽"，保证**永远恰好 3 只**。
+  //   调用方（DataBus）通常已在关卡边界主动清空，这里是第二道保险。
+  const exclude = Array.isArray(opts.excludeStocks) ? opts.excludeStocks : [];
+  let stocks = pickStocks(3, { exclude });
+  let recycled = false;
+  if (stocks.length < 3) {
+    stocks = pickStocks(3);
+    recycled = true;
+  }
+
+  // ---- ③ 定义 + 新闻 ----
+  const defs = buildDefs(stocks, style, seedKey, turns);
+  const newsDeck = buildNewsDeck(defs, turns);
+
+  return {
+    seedKey,
+    style,
+    turns,
+    initCash,
+    stockDefs: defs,
+    newsDeck,
+    stockCodes: defs.map((d) => d.code),
+    recycled, // 是否因为池子耗尽而重置了排除集（调试/统计用）
+    seasonId: null,
+    seasonLabel: null,
+    seasonIntro: null,
+  };
+}
+
+/**
  * ★ 抽取年景 —— 这是"随机在不同类型的池子里抽卡，但是不要重复"的实现
  *
  * 算法：
@@ -231,31 +361,7 @@ export function composeFromSeason(season, opts = {}) {
 
   const stocks = stocksOfSeason(season);
 
-  const defs = stocks.map((s) => {
-    const path = generatePath(s, style, seedKey, turns);
-    const def = { ...s, path };
-
-    const dl = rollDelist(s, style, seedKey, turns);
-    if (dl) {
-      def.delistAt = dl.delistAt;
-      def.delistPrice = dl.delistPrice;
-    }
-    return def;
-  });
-
-  // 保底：一局最多一只股票退市（避免三只全爆雷把玩家直接打死）
-  const delistable = defs.filter((d) => d.delistAt);
-  if (delistable.length > 1) {
-    const keeper = delistable.reduce((a, b) =>
-      (a.profile.luck || 0) <= (b.profile.luck || 0) ? a : b,
-    );
-    defs.forEach((d) => {
-      if (d.delistAt && d !== keeper) {
-        delete d.delistAt;
-        delete d.delistPrice;
-      }
-    });
-  }
+  const defs = buildDefs(stocks, style, seedKey, turns);
 
   const newsDeck = buildNewsDeck(defs, turns, { seasonNews: season.news });
 
@@ -301,21 +407,7 @@ export function composeGame(opts = {}) {
   // ---- 路径 1：直接注入股票（测试用，跳过抽选）----
   if (opts.stocks && opts.stocks.length) {
     const style = opts.style || 'bull';
-    const defs = opts.stocks.map((s) => {
-      const path = generatePath(s, style, seedKey, turns);
-      const def = { ...s, path };
-      const dl = rollDelist(s, style, seedKey, turns);
-      if (dl) { def.delistAt = dl.delistAt; def.delistPrice = dl.delistPrice; }
-      return def;
-    });
-    const delistable = defs.filter((d) => d.delistAt);
-    if (delistable.length > 1) {
-      const keeper = delistable.reduce((a, b) =>
-        (a.profile.luck || 0) <= (b.profile.luck || 0) ? a : b);
-      defs.forEach((d) => {
-        if (d.delistAt && d !== keeper) { delete d.delistAt; delete d.delistPrice; }
-      });
-    }
+    const defs = buildDefs(opts.stocks, style, seedKey, turns);
     return {
       seedKey,
       style,
@@ -404,13 +496,9 @@ export function composeGame(opts = {}) {
       const arr = Array.isArray(opts.styles) && opts.styles.length ? opts.styles : MARKET_STYLE_KEYS;
       style = shuffle(arr.slice())[0];
     }
-    const defs = pickStocks(3).map((s) => {
-      const path = generatePath(s, style, seedKey, turns);
-      const def = { ...s, path };
-      const dl = rollDelist(s, style, seedKey, turns);
-      if (dl) { def.delistAt = dl.delistAt; def.delistPrice = dl.delistPrice; }
-      return def;
-    });
+    // ★ 这里原本漏了"一局最多一只退市"的保底（三处拷贝里唯一漏掉的一处），
+    //   合并到 buildDefs 之后才补上。
+    const defs = buildDefs(pickStocks(3), style, seedKey, turns);
     return {
       seedKey, style, turns, initCash,
       stockDefs: defs,

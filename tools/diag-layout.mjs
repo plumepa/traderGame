@@ -20,6 +20,8 @@
 
 const ROOT = new URL('..', import.meta.url);
 
+import { audioApi } from './wx-audio.mjs';
+
 let passed = 0;
 let failed = 0;
 const fails = [];
@@ -43,6 +45,7 @@ function section(t) {
 // ============================================================
 let texts = [];
 let fills = [];
+let paths = [];
 let curFont = '12px sans-serif';
 let curAlign = 'left';
 
@@ -71,6 +74,9 @@ function makeCtx2D(W, H) {
     fillText: (s, x, y) =>
       texts.push({ str: String(s), x, y, size: sizeOf(curFont), align: curAlign }),
     fillRect: (x, y, w, h) => fills.push({ x, y, w, h, color: target.fillStyle }),
+    // 折线 / 网格 / 坐标轴都是 moveTo + lineTo，录下来才能断言"没画出边界"
+    moveTo: (x, y) => paths.push([x, y]),
+    lineTo: (x, y) => paths.push([x, y]),
   };
   return new Proxy(target, {
     get(t, k) {
@@ -103,7 +109,7 @@ function installWx(W, H, safeTop) {
     onTouchEnd: () => {},
     setStorageSync: () => {},
     getStorageSync: () => '',
-    createInnerAudioContext: () => ({ play: () => {}, stop: () => {}, destroy: () => {} }),
+    ...audioApi(),
   };
   globalThis.requestAnimationFrame = () => 0;
   globalThis.cancelAnimationFrame = () => {};
@@ -115,6 +121,8 @@ const { FONT, PALETTE } = await import(new URL('js/styles/palette.js', ROOT).hre
 const { safeTop: safeTopOf, contentTop, safeBottom, MIN_TOP } = await import(
   new URL('js/styles/layout.js', ROOT).href
 );
+const audio = await import(new URL('js/core/audio.js', ROOT).href);
+const muteButton = await import(new URL('js/ui/mute-button.js', ROOT).href);
 
 // ============================================================
 // [1] 字号
@@ -165,6 +173,8 @@ for (const dev of DEVICES) {
   section(`[3] ${name}  ${W}×${H}  safeTop=${safeTop}`);
 
   const handlers = installWx(W, H, safeTop);
+  // 全局音频开关是模块级单例，跨机型会串场 —— 每台机器先复位
+  audio.reset();
   const app = new Main();
   app.bus.reset();
 
@@ -180,9 +190,11 @@ for (const dev of DEVICES) {
   const shot = (label) => {
     texts = [];
     fills = [];
+    paths = [];
     app._frame(16);
     const t = texts.slice();
     const f = fills.slice();
+    const pa = paths.slice();
     check(`${label}：有文案被绘制`, t.length > 0, `条数=${t.length}`);
     if (t.length) {
       const minY = Math.min(...t.map((o) => o.y));
@@ -194,7 +206,7 @@ for (const dev of DEVICES) {
       );
       check(`${label}：文案不越过底部安全区（y ≤ ${H - 10}）`, maxY <= H - 10, `最大 y=${maxY}`);
     }
-    return { t, f };
+    return { t, f, paths: pa };
   };
 
   // ---- 菜单 ----
@@ -203,6 +215,106 @@ for (const dev of DEVICES) {
   const pixel = menuShot.t.find((o) => o.str === 'PIXEL');
   check('菜单标题 PIXEL 已下移到安全区之下', !!pixel && pixel.y >= safeTop,
     pixel ? `y=${pixel.y}` : '未找到');
+
+  // ---- 声音开关按钮（全局覆盖层，画在所有场景之上）----
+  {
+    const r = muteButton.buttonRect(W, H);
+    const hit = muteButton.hitRect(W, H);
+    const ct = contentTop();
+
+    check('声音按钮在屏幕内',
+      r.x >= 0 && r.y >= 0 && r.x + r.w <= W && r.y + r.h <= H,
+      `rect=${JSON.stringify(r)}`);
+    check('★ 声音按钮整个落在顶部安全区带内（不侵占任何场景的内容区）',
+      r.y + r.h <= ct,
+      `按钮底=${r.y + r.h}  内容起点=${ct}`);
+    check('声音按钮在左上角', r.x <= 14, `x=${r.x}`);
+    check('声音按钮不压住灵动岛（横向上在左侧留白区）',
+      r.x + r.w <= W / 2 - 40,
+      `按钮右=${r.x + r.w}  屏幕中线=${W / 2}`);
+    check('命中区不越出屏幕',
+      hit.x >= 0 && hit.y >= 0 && hit.x + hit.w <= W && hit.y + hit.h <= H,
+      `hit=${JSON.stringify(hit)}`);
+    // 命中区下限取 34 而不是 44：
+    //   矮安全区机型（iPhone SE 只有 20px）可用的竖向空间 = contentTop() - 0 ≈ 28px，
+    //   按钮 24 + 下方外扩 6 已经顶到 34，再大就必须侵占内容区。
+    //   "不越界" 比 "够大" 更重要 —— 这是角落里的次要控件，不是主操作。
+    check('命中区不小于 34×34（手指点得中）',
+      hit.w >= 34 && hit.h >= 34, `${hit.w}×${hit.h}`);
+
+    // 覆盖层必须"惰性"：不产生任何路径点，否则会污染场景的路径几何断言
+    texts = []; fills = []; paths = [];
+    muteButton.draw(makeCtx2D(W, H), W, H);
+    check('★ 声音按钮绘制不产生路径点（不污染场景的路径断言）',
+      paths.length === 0, `路径点 ${paths.length} 个`);
+    check('声音按钮确实画了东西', fills.length > 0, `色块 ${fills.length}`);
+
+    // 图标点阵必须完整落在按钮内
+    const cell = muteButton.cellSize(W, H);
+    const o = muteButton.iconOrigin(W, H);
+    const span = cell * muteButton.GRID;
+    check('图标点阵完整落在按钮内',
+      o.x >= r.x && o.y >= r.y && o.x + span <= r.x + r.w && o.y + span <= r.y + r.h,
+      `图标 ${o.x},${o.y} +${span}  按钮 ${JSON.stringify(r)}`);
+
+    // ---- 点阵格子之间不能有缝 ----
+    // ⚠️ 这条断言来自"看"：3px 的格子在按钮里裂出了 3 条 1px 黑缝。
+    //    成因是 drawBitmap 逐格 snap()，而 snap 把值对齐到 PIXEL(=2) 的整数倍，
+    //    cell=3 是奇数 → 相邻格错开 1px：snap(14)=14 占 14~16，snap(17)=18 占 18~20，17 就空了。
+    //    断言口径：同一行/列里相邻两格的空隙只能是 0（紧挨着）或 ≥ 一整格（有意留白）。
+    //    落在 (0, cell) 之间的空隙 = 裂缝，必是 bug。
+    {
+      const iconColors = new Set([PALETTE.text, PALETTE.textDim, PALETTE.accent, PALETTE.danger]);
+      const cells = fills.filter((f) => iconColors.has(f.color));
+      check('★ 点阵图标确实画出了格子', cells.length > 0, `格子 ${cells.length}`);
+
+      // axis='x' 看横向裂缝，axis='y' 看纵向裂缝
+      const cracksIn = (axis) => {
+        const cross = axis === 'x' ? 'y' : 'x';
+        const size = axis === 'x' ? 'w' : 'h';
+        const groups = new Map();
+        for (const c of cells) {
+          const k = c[cross];
+          if (!groups.has(k)) groups.set(k, []);
+          groups.get(k).push(c);
+        }
+        const bad = [];
+        for (const [k, list] of groups) {
+          list.sort((a, b) => a[axis] - b[axis]);
+          for (let i = 1; i < list.length; i++) {
+            const gap = list[i][axis] - (list[i - 1][axis] + list[i - 1][size]);
+            if (gap > 0 && gap < cell) bad.push({ at: k, gap });
+          }
+        }
+        return bad;
+      };
+      const gx = cracksIn('x');
+      const gy = cracksIn('y');
+      check('★ 点阵横向没有裂缝（相邻格必须相接）', gx.length === 0,
+        gx.length ? `${gx.length} 处裂缝，例如 ${JSON.stringify(gx[0])}` : '');
+      check('★ 点阵纵向没有裂缝（相邻格必须相接）', gy.length === 0,
+        gy.length ? `${gy.length} 处裂缝，例如 ${JSON.stringify(gy[0])}` : '');
+    }
+
+    // 点它：开关翻转，且**不**透传给场景
+    const before = audio.isMuted();
+    const sceneBefore = app.current;
+    tapAt(r.x + r.w / 2, r.y + r.h / 2);
+    check('★ 点声音按钮会翻转静音状态', audio.isMuted() !== before,
+      `${before} → ${audio.isMuted()}`);
+    check('点声音按钮不会切换场景', app.current === sceneBefore,
+      '当前=' + (app.current && app.current.name));
+    tapAt(r.x + r.w / 2, r.y + r.h / 2);
+    check('再点一次切回原状态', audio.isMuted() === before, `现在 ${audio.isMuted()}`);
+
+    // 静音时按钮仍要画出来（否则用户找不到开关）
+    audio.setMuted(true);
+    texts = []; fills = []; paths = [];
+    muteButton.draw(makeCtx2D(W, H), W, H);
+    check('静音状态下按钮仍然绘制', fills.length > 0, `色块 ${fills.length}`);
+    check('静音状态下的绘制同样不产生路径点', paths.length === 0);
+    audio.setMuted(false);
+  }
 
   // ---- 开局 → 新闻 ----
   tapRect(app.menu._btn);
@@ -278,10 +390,24 @@ for (const dev of DEVICES) {
   // ---- 走势图弹窗 ----
   app.trading.openChart(app.bus.stockDefs[0].code);
   drive(2);
-  shot('走势图弹窗');
+  const chartShot = shot('走势图弹窗');
   const cr = app.trading._chartRect;
   check('走势图面板顶边在安全区之下', cr.y >= safeTop, `y=${cr.y}`);
   check('走势图面板底边不越界', cr.y + cr.h <= H - 10, `底边=${cr.y + cr.h}`);
+
+  // ★ 折线必须完全落在面板内。
+  //   这里覆盖了"纵轴范围按收盘价算、月内波动点却超出该范围"的回归 ——
+  //   横盘股全年振幅很小时，月内抖动会大于全年振幅，折线曾被外推冲出面板。
+  {
+    const outside = chartShot.paths.filter(
+      ([px, py]) => px < cr.x - 1 || px > cr.x + cr.w + 1 || py < cr.y - 1 || py > cr.y + cr.h + 1,
+    );
+    check('★ 走势图里所有折线/网格/坐标轴都落在面板内',
+      chartShot.paths.length > 20 && outside.length === 0,
+      `路径点 ${chartShot.paths.length} 个，越界 ${outside.length} 个` +
+        (outside.length ? `，例如 ${JSON.stringify(outside.slice(0, 3))}` : ''));
+  }
+
   app.trading.closeChart();
   drive(2);
 
@@ -400,6 +526,167 @@ section('[4] 退市横幅不遮挡股票卡片');
         flow.nextY + flow.nextH <= H - 10,
         `按钮底=${flow.nextY + flow.nextH} 上限=${H - 10}`);
     }
+  }
+}
+
+// ============================================================
+// [5] 结算场景：按钮集合随状态变化，且绝不吃掉走势图
+// ============================================================
+section('[5] 结算场景版面（连闯：一或两个出口）');
+
+{
+  const { default: ResultScene } = await import(new URL('js/scenes/result.js', ROOT).href);
+  const { bindContext } = await import(new URL('js/styles/widgets.js', ROOT).href);
+  const { setSafeArea, contentBottom } = await import(new URL('js/styles/layout.js', ROOT).href);
+
+  const RESULT_DEVICES = [
+    { name: 'iPhone 15 Pro', W: 393, H: 852, safeTop: 59, roomy: true },
+    { name: 'Android 常规', W: 412, H: 915, safeTop: 24, roomy: true },
+    // 小屏：版面本来就装不下走势图，这里验的是"优雅降级"而不是"必须有图"
+    { name: '小屏 320×568', W: 320, H: 568, safeTop: 20, roomy: false },
+  ];
+
+  /**
+   * 四种状态各自应当出现哪些出口 —— 这份表就是 result.js 里 actionsOf 的规格
+   *
+   * 破产必须排在轮末之前判断：破产时若还摆出"进入下一关"，
+   * 点进去就是拿 ¥0 开局，玩家会以为游戏坏了。
+   */
+  const STATES = [
+    { kind: '普通关', events: ['nextLevel', 'menu'] },
+    { kind: '轮末', events: ['nextLevel', 'final'] },
+    { kind: '破产', events: ['menu'] },
+    { kind: '退市结算', events: ['menu'] },
+  ];
+
+  /** 造一个只够结算场景用的假 bus */
+  function makeBus(kind) {
+    const defs = [
+      { code: '900101', name: '甲股', sector: 'a' },
+      { code: '900102', name: '乙股', sector: 'b' },
+      { code: '900103', name: '丙股', sector: 'c' },
+    ];
+    const hist = {};
+    defs.forEach((d) => {
+      hist[d.code] = Array.from({ length: 13 }, (_, i) => ({ price: 10 + i }));
+    });
+
+    const isFinal = kind === '退市结算';
+    const bankrupt = kind === '破产';
+    const block = kind === '轮末';
+
+    const runResults = [];
+    const n = isFinal ? 7 : block ? 5 : 1;
+    for (let i = 0; i < n; i++) {
+      runResults.push({
+        index: i + 1, step: (i % 5) + 1, round: Math.floor(i / 5) + 1,
+        turns: 12, initCash: 10000, total: 10000, outcome: 'lose',
+      });
+    }
+
+    return {
+      runMode: !isFinal,
+      roundIndex: isFinal ? 1 : 0,
+      stepIndex: block ? 4 : 0,
+      runResults,
+      initCash: 10000,
+      level: { id: 'lv_01', index: 1, turns: 12, initCash: 10000 },
+      stockDefs: defs,
+      simulator: { historyOf: (c) => hist[c] || [] },
+      result: {
+        outcome: bankrupt ? 'bankrupt' : 'lose',
+        reason: '一年期满，净亏 ¥120（-1.2%）。市场收走了你的钱。年末已按市价清仓 200 股。',
+        total: 9880, init: 10000, profit: -120, returnRate: -0.012, turns: 12,
+        liquidation: null,
+        delistEvents: bankrupt ? [{ name: '甲股', turn: 7, held: true, profit: -8590 }] : [],
+        isFinal,
+        levels: isFinal ? 7 : undefined,
+      },
+      levelPosition: () => (isFinal
+        ? { index: 7, total: 10, step: 2, round: 2, blockTotal: 5 }
+        : block
+          ? { index: 5, total: 5, step: 5, round: 1, blockTotal: 5 }
+          : { index: 1, total: 5, step: 1, round: 1, blockTotal: 5 }),
+      isBlockEnd: () => block,
+      canContinue: () => !bankrupt && !isFinal,
+    };
+  }
+
+  for (const dev of RESULT_DEVICES) {
+    const { name, W, H, safeTop, roomy } = dev;
+    installWx(W, H, safeTop);
+    setSafeArea(globalThis.wx.getSystemInfoSync());
+    bindContext(makeCtx2D(W, H));
+
+    const top = contentTop();
+    const bottom = contentBottom(H);
+
+    for (const st of STATES) {
+      const bus = makeBus(st.kind);
+      const scene = new ResultScene(bus);
+      const flow = scene._flow(W, H);
+      const tag = `${name} / ${st.kind}`;
+
+      // ---- 出口集合 ----
+      const events = flow.buttons.map((b) => b.event);
+      check(`${tag}：出口应为 ${st.events.join(' + ')}`,
+        events.join(',') === st.events.join(','), `实际 ${events.join(',')}`);
+
+      // ---- 按钮几何 ----
+      flow.buttons.forEach((b, i) => {
+        check(`${tag}：第 ${i + 1} 个按钮在画布内`,
+          b.x >= 0 && b.x + b.w <= W, `x=${b.x} w=${b.w} W=${W}`);
+        check(`${tag}：第 ${i + 1} 个按钮让开顶部安全区`,
+          b.y >= top, `y=${b.y} top=${top}`);
+        check(`${tag}：第 ${i + 1} 个按钮让开底部安全区`,
+          b.y + b.h <= bottom, `底=${b.y + b.h} bottom=${bottom}`);
+      });
+
+      if (flow.buttons.length === 2) {
+        const [a, b] = flow.buttons;
+        check(`${tag}：★ 两个按钮并排且不重叠`,
+          a.x + a.w <= b.x, `甲右=${a.x + a.w} 乙左=${b.x}`);
+        check(`${tag}：两个按钮同一行（高度对齐）`,
+          a.y === b.y && a.h === b.h, `y=${a.y}/${b.y} h=${a.h}/${b.h}`);
+      }
+
+      // ---- 按钮不得压住成绩面板 ----
+      const panelBottom = flow.panelY + flow.panelH;
+      check(`${tag}：按钮不压住成绩面板`,
+        flow.btn.y >= panelBottom, `按钮顶=${flow.btn.y} 面板底=${panelBottom}`);
+
+      // ---- 走势图：要么画得完整，要么整块不画，绝不半截被按钮截断 ----
+      if (flow.showChart) {
+        check(`${tag}：★ 走势图底部不越过按钮区`,
+          flow.chartY + flow.chartH <= flow.btn.y - 14 + 0.01,
+          `图底=${flow.chartY + flow.chartH} 按钮顶=${flow.btn.y}`);
+        check(`${tag}：走势图高度不低于降级下限 52`,
+          flow.chartH >= 52, `chartH=${flow.chartH}`);
+        check(`${tag}：走势图各区块纵向有序（标题 < 图例 < 图）`,
+          flow.trendTitleY < flow.legendY && flow.legendY < flow.chartY,
+          `${flow.trendTitleY} / ${flow.legendY} / ${flow.chartY}`);
+      } else {
+        check(`${tag}：不画图时不得残留标题或图例`,
+          flow.chartH === 0, `chartH=${flow.chartH}`);
+      }
+
+      // ---- ★ 关键回归：空间够的机型上，轮末那张图不许"凭空消失" ----
+      //
+      // 轮末比普通关多两行（本轮累计 / 累计收益率）。曾经把按钮上下堆叠，
+      // 按钮区要占 116px，正好把这两行的差额吃光 —— 轮末的走势图整块不见，
+      // 而玩家恰恰是在轮末最需要看走势来决定"继续还是收手"。
+      if (roomy) {
+        check(`${tag}：★ 空间充足的机型必须画得出走势图`,
+          flow.showChart === true,
+          `chartY=${flow.chartY} btnY=${flow.btn.y} chartH=${flow.chartH}`);
+      }
+    }
+
+    // ---- 轮末的行数必须真的比普通关多（否则上面那条断言等于没验）----
+    const rowsNormal = new ResultScene(makeBus('普通关'))._rows(makeBus('普通关').result).length;
+    const rowsBlock = new ResultScene(makeBus('轮末'))._rows(makeBus('轮末').result).length;
+    check(`${name}：★ 轮末比普通关多出行（累计战绩）`,
+      rowsBlock > rowsNormal, `普通=${rowsNormal} 轮末=${rowsBlock}`);
   }
 }
 

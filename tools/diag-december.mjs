@@ -15,6 +15,8 @@
 
 import { createHash } from 'node:crypto';
 
+import { audioApi } from './wx-audio.mjs';
+
 const ROOT = new URL('..', import.meta.url);
 
 let passed = 0, failed = 0;
@@ -64,7 +66,7 @@ function installWx() {
     onTouchMove: (cb) => handlers.touchmove.push(cb),
     onTouchEnd: (cb) => handlers.touchend.push(cb),
     setStorageSync: () => {}, getStorageSync: () => '',
-    createInnerAudioContext: () => ({ play: () => {}, stop: () => {}, destroy: () => {} }),
+    ...audioApi(),
   };
   // Renderer.start 会用 requestAnimationFrame 拉起主循环；
   // 我们自己手动 _frame() 驱动，所以这里给个不自动跑的实现。

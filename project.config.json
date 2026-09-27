@@ -48,7 +48,20 @@
   },
   "simulatorPluginLibVersion": {},
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      { "type": "folder", "value": "tools" },
+      { "type": "folder", "value": "preview" },
+      { "type": "folder", "value": ".git" },
+      { "type": "folder", "value": ".workbuddy-ai" },
+      { "type": "folder", "value": "_backup_素材_20260925_051453" },
+      { "type": "file", "value": "README.md" },
+      { "type": "file", "value": "DEV-TASKS.md" },
+      { "type": "file", "value": ".eslintrc.js" },
+      { "type": "file", "value": "project.private.config.json" },
+      { "type": "file", "value": "_backup_数据_20260925_073551.tar.gz" },
+      { "type": "file", "value": "_backup_旧数据层_20260925_081701.tar.gz" },
+      { "type": "file", "value": "sonilo_music_8826bff6-60a9-4c13-b090-83e73ac64ae4_1.m4a" }
+    ],
     "include": []
   },
   "isGameTourist": false,

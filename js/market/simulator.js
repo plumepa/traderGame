@@ -158,6 +158,7 @@ export default class Simulator {
       const newsChange = this._activeDrift(def);
       const totalChange = pathChange + newsChange;
 
+      const prevPrice = st.price;
       let next;
       if (willDelist) {
         // 爆雷：直接砸到退市价（可能远低于 floor）
@@ -169,11 +170,24 @@ export default class Simulator {
         next = Math.max(raw, def.floor);
       }
 
-      st.price = Math.round(next * 100) / 100; // 保留两位小数
+      st.price = Math.round(next * 100) / 100;
+
+      // ---- ★ 上报**实际**涨跌幅，而不是"计划涨跌幅" ----
+      //
+      // 早先这里直接上报 totalChange（path + news），有两处会说谎：
+      //   ① 退市爆雷：价格从 ¥8.5 砸到 ¥1.2，totalChange 却只有 -0.8%
+      //      → 卡片上显示"↓-0.8%"，与价格对不上，玩家看不出这是爆雷
+      //   ② 触底：next 被 def.floor 兜住时，实际跌幅小于 totalChange
+      // 现在统一用「价格转移」反推，涨跌幅与价格**永远自洽**。
+      // pathChange / newsChange 仍然原样带出去，它们表示"计划中的分量"，供诊断用。
+      const actualChange = prevPrice > 0
+        ? (st.price / prevPrice - 1) * 100
+        : 0;
+
       st.history.push({
         turn: t,
         price: st.price,
-        change: totalChange,
+        change: actualChange,
         pathChange,
         newsChange,
         delisted: willDelist,
@@ -181,7 +195,7 @@ export default class Simulator {
 
       result[code] = {
         price: st.price,
-        change: totalChange,
+        change: actualChange,
         pathChange,
         newsChange,
         delisted: willDelist,

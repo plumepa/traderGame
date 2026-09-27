@@ -20,6 +20,8 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 
+import { audioApi } from './wx-audio.mjs';
+
 const ROOT = new URL('..', import.meta.url);
 
 // ============================================================
@@ -117,7 +119,7 @@ function installWx(W, H, safeTop, sink) {
     onTouchEnd: () => {},
     setStorageSync: () => {},
     getStorageSync: () => '',
-    createInnerAudioContext: () => ({ play: () => {}, stop: () => {}, destroy: () => {} }),
+    ...audioApi(),
   };
   globalThis.requestAnimationFrame = () => 0;
   globalThis.cancelAnimationFrame = () => {};
@@ -125,16 +127,23 @@ function installWx(W, H, safeTop, sink) {
 }
 
 const { default: Main } = await import(new URL('js/main.js', ROOT).href);
+const audio = await import(new URL('js/core/audio.js', ROOT).href);
 
 // ============================================================
 // 抓一个机型的五张画面
 // ============================================================
 const DEVICE = { W: 393, H: 852, safeTop: 59, label: 'iPhone 15 Pro（灵动岛 59px）' };
 
+// 声音开关有两种外观（喇叭 + 声波 / 喇叭 + 红叉）。
+// 只抓默认态的话，静音态画得对不对根本没人看得见 ——
+// 用 MUTE_STATE=1 再跑一次就能肉眼比对。
+const MUTED = process.env.MUTE_STATE === '1';
+
 const sink = { ops: [], grads: {} };
 const handlers = installWx(DEVICE.W, DEVICE.H, DEVICE.safeTop, sink);
 const app = new Main();
 app.bus.reset();
+audio.setMuted(MUTED);
 
 const frames = [];
 function grab(label, note) {
@@ -149,7 +158,7 @@ function grab(label, note) {
   app.renderer.scanlines();
   app.renderer.vignette();
   frames.push({
-    label,
+    label: MUTED ? `${label}（静音）` : label,
     note,
     ops: sink.ops.slice(),
     grads: JSON.parse(JSON.stringify(sink.grads)),
@@ -201,7 +210,36 @@ while (app.bus.phase !== 'OVER' && guard++ < 400) {
   app._frame(16);
 }
 app._frame(16);
-grab('结算', '按钮夹在底部安全区之上');
+grab('结算 · 普通关', '两个出口并排：进入下一关（主）/ 返回主界面（次）');
+
+// ---- 快进到轮末，抓"继续 · 再来五关 / 退市结算"那一版 ----
+//
+// ⚠️ 必须真的抓一张轮末的图：轮末的按钮文案更长（"继续 · 再来五关"），
+//   而两个按钮并排时字宽只有一半 —— 文案会不会溢出按钮，
+//   只有画出来才知道，断言只能证明不越界。
+let lv = 0;
+while (!app.bus.isBlockEnd() && lv++ < 8) {
+  const btn = (app.result._buttons || []).find((b) => b.event === 'nextLevel');
+  if (!btn) break;
+  tapRect(btn);
+  app._frame(16);
+  app._frame(16);
+
+  // ⚠️ 必须**真的**把这 12 个月跑完，不能直接 settleTerm()。
+  //   直接结算会让 simulator 的历史只有 1 个点 → 结算页的 seriesCount = 0
+  //   → 走势图整块不画。第一次抓图就踩了这个坑：轮末那张没有图，
+  //   看起来像版面退化，其实是"快进方式不真实"。
+  for (let t = 0; t < app.bus.level.turns; t++) {
+    app.bus.nextTurn();
+    app.bus.settle();
+  }
+  app.bus.settleTerm();
+  app.switchTo('result');
+  app._frame(16);
+  app._frame(16);
+}
+app._frame(16);
+grab('结算 · 轮末', '轮末多两个选择：继续 · 再来五关（主）/ 退市结算（次）');
 
 // ============================================================
 // 生成 HTML

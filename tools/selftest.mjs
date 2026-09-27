@@ -601,7 +601,12 @@ ok(new Set(ids).size === ids.length, '同一局内新闻不应重复');
 
 // ---------- 8. 机构评级 ----------
 console.log('[8] 机构评级');
-const { default: Institution, RATINGS } = await import('../js/news/institution.js');
+const {
+  default: Institution,
+  RATINGS,
+  WEIGHT_NEWS,
+  WEIGHT_NOISE,
+} = await import('../js/news/institution.js');
 
 // 三只不同行业的股票 + 对应的涨跌幅映射（用股票池里的真实对象，不写死代码）
 const rA = STOCK_POOL.find((s) => s.sector === 'liquor') || STOCK_POOL[0];
@@ -619,38 +624,75 @@ ratings.forEach((r) => {
   ok(!Number.isNaN(r.score), `${r.name} 的 score 不应为 NaN`);
 });
 
-// 明显上涨应偏多、明显下跌应偏空（多跑几次取多数）
+// 明显上涨应偏多、明显下跌应偏空
+//
+// ⚠️ 口径说明（第四版）：这里同时断言**因子**与**总分**。
+//    · parts.trend 是确定性的 —— 相对强弱 +6/−6 必然给出 ±1，可以断言到 0.9 以上
+//    · score 含随机噪声，只能给一个宽松阈值。
+//      噪声权重 0.60 时：score = 0.30·(±1) + 0.60·n，命中率 = P(0.30 + 0.60n > 0) = 75%，
+//      即 40 次里期望 30 次。阈值取 22（z ≈ −2.9）留足余量；
+//      trend 权重若被调没，命中率会掉回 50%（20 次），仍然拦得住。
+//   只断言 score 会随噪声权重调整而误报；只断言 factor 又验证不到权重组合是否合理。
 let upBull = 0;
 let downBear = 0;
-for (let i = 0; i < 20; i++) {
+let trendOk = 0;
+for (let i = 0; i < 40; i++) {
   const ii = new Institution();
+  // 相对强弱：CA 最强、CB 最弱（三者均值 = 0）
   const rs = ii.rateAll(rateDefs, { [CA]: 6, [CB]: -6, [CC]: 0 }, null);
   const up = rs.find((r) => r.code === CA);
   const dn = rs.find((r) => r.code === CB);
+  if (up.parts.trend > 0.9 && dn.parts.trend < -0.9) trendOk++;
   if (up.score > 0) upBull++;
   if (dn.score < 0) downBear++;
 }
-ok(upBull >= 16, `大涨时评级应偏多（20 次中 ${upBull} 次为正）`);
-ok(downBear >= 16, `大跌时评级应偏空（20 次中 ${downBear} 次为负）`);
+ok(trendOk === 40, `★ 相对强弱因子应饱和到 ±1（40 次中 ${trendOk} 次）`);
+ok(upBull >= 22, `最强股评级应偏多（40 次中 ${upBull} 次为正，理论 30 次）`);
+ok(downBear >= 22, `最弱股评级应偏空（40 次中 ${downBear} 次为负，理论 30 次）`);
 
 // 假消息反向：同一 drift，真消息与假消息的新闻因子应相反
+//
+// ⚠️ 口径（第四版修订）：新闻方向**编码在因子里**（确定性，可精确断言），
+//   但**不该可靠地体现在总分上** —— 这正是"假消息不点破"的设计。
+//   新闻权重 0.10、噪声权重 0.60：强消息把总分推向正确方向的概率只有
+//   P(0.10 + 0.60·n > 0) = 58%，也就是**四成时候看不出来**。
+//   旧版新闻权重 0.30，总分能可靠跟着新闻走 = 等于把答案写在玩家脸上。
+//   所以这里改成两条：
+//     · 因子必须严格反向（确定性）
+//     · 总分的"新闻倾向"必须**明显弱于可靠**（噪声话语权必须压过新闻话语权）
 let truthPos = 0;
 let fakeNeg = 0;
+let newsOpposite = 0;
 for (let i = 0; i < 40; i++) {
-  const ii1 = new Institution();
-  const ii2 = new Institution();
   const newsTrue = { id: 'x', sector: 'liquor', kind: 'relevant', impact: { drift: 5, turns: 1 }, truth: true };
   const newsFake = { id: 'x', sector: 'liquor', kind: 'relevant', impact: { drift: 5, turns: 1 }, truth: false };
   // 走势给 0，隔离新闻因子
-  if (ii1.rateAll(rateDefs, { [CA]: 0, [CB]: 0, [CC]: 0 }, newsTrue)[0].score > 0) truthPos++;
-  if (ii2.rateAll(rateDefs, { [CA]: 0, [CB]: 0, [CC]: 0 }, newsFake)[0].score < 0) fakeNeg++;
+  const rt = new Institution().rateAll(rateDefs, { [CA]: 0, [CB]: 0, [CC]: 0 }, newsTrue)[0];
+  const rf = new Institution().rateAll(rateDefs, { [CA]: 0, [CB]: 0, [CC]: 0 }, newsFake)[0];
+  if (rt.parts.news > 0.9 && rf.parts.news < -0.9) newsOpposite++;
+  if (rt.score > 0) truthPos++;
+  if (rf.score < 0) fakeNeg++;
 }
-ok(truthPos >= 30, `真利好消息应偏多（40 次中 ${truthPos} 次为正）`);
-ok(fakeNeg >= 30, `假利好消息应偏空（40 次中 ${fakeNeg} 次为负）—— 反向机制生效`);
+ok(newsOpposite === 40, `★ 真/假消息的新闻因子必须严格反向（40 次中 ${newsOpposite} 次）`);
+// 确定性：新闻的话语权必须低于噪声的一半。若 NEWS ≥ NOISE，
+// 强消息（|factor| = 1）就能把总分推过噪声半幅，评级重新变成"照抄新闻"。
+ok(WEIGHT_NEWS < WEIGHT_NOISE * 0.5,
+  `★ 新闻话语权必须远低于噪声（NEWS ${WEIGHT_NEWS} < NOISE ${WEIGHT_NOISE} × 0.5）`);
+// 统计：总分对新闻方向的倾向必须"弱"。理论值 58%，上限取 78%（z≈+4，几乎不会误报）。
+const newsLean = (truthPos + fakeNeg) / 80;
+ok(newsLean < 0.78,
+  `★ 总分只该"轻微"体现新闻方向（实际 ${(newsLean * 100).toFixed(1)}% < 78%，理论 58%）`
+  + ' —— 再高就等于把真假写在玩家脸上');
 
 // ★ 错配新闻：sector 不命中该股 → 新闻因子不体现消息方向
+//
+// ⚠️ 断言口径是 **parts.news**，不是 score。
+//    旧版断言的是"总分接近中性"，而总分里混着随机噪声 ——
+//    一旦调高噪声权重（第四版把噪声从 0.2 提到 0.36），那条断言就误报，
+//    看起来像"错配逻辑坏了"，其实是噪声变大了。
+//    直接断言新闻因子，才与噪声权重解耦。
 {
-  let mismatchNeutral = 0;
+  let maxNews = 0;
   for (let i = 0; i < 40; i++) {
     const ii = new Institution();
     // 白酒股 + 运输利好（错配）
@@ -659,14 +701,20 @@ ok(fakeNeg >= 30, `假利好消息应偏空（40 次中 ${fakeNeg} 次为负）�
       { [CA]: 0, [CB]: 0, [CC]: 0 },
       { id: 'm', sector: 'transport', kind: 'irrelevant', impact: { drift: 5, turns: 1 }, truth: true },
     );
-    if (Math.abs(rs[0].score) < 0.15) mismatchNeutral++;
+    maxNews = Math.max(maxNews, Math.abs(rs[0].parts.news));
   }
-  ok(mismatchNeutral >= 20, `★ 错配新闻对白酒股评分影响应很小（40 次中 ${mismatchNeutral} 次接近中性）`);
+  ok(maxNews <= 0.05, `★ 错配新闻不体现方向（新闻因子最大 |${maxNews.toFixed(3)}| ≤ 0.05）`);
 }
 
-// ★ 利好但承压：评级应偏空（背离新闻面）
+// ★ 利好但承压（= 财务造假 / 增收不增利）：机构应**跟着标题看多**
+//
+// 第四版**刻意反转**了旧行为。旧版让机构一眼识破（评级偏空），
+// 等于免费送给玩家一个"暴雷预警"；实测暴雷前一月有 53.9% 被打成看空
+// （全体基准 35.8%），玩家照着躲就行。
+// 现在机构被"报表一片向好"骗到 —— 评级偏多，随后业绩暴雷。
+// 玩家必须自己起疑："这么好的消息，股价为什么在跌？"
 {
-  let pressuredBear = 0;
+  let pressuredBull = 0;
   for (let i = 0; i < 40; i++) {
     const ii = new Institution();
     const rs = ii.rateAll(
@@ -674,9 +722,60 @@ ok(fakeNeg >= 30, `假利好消息应偏空（40 次中 ${fakeNeg} 次为负）�
       { [CA]: 0, [CB]: 0, [CC]: 0 },
       { id: 'p', sector: 'liquor', kind: 'pressured', impact: { drift: 5, turns: 1 }, truth: true },
     );
-    if (rs[0].score < 0) pressuredBear++;
+    if (rs[0].parts.news > 0) pressuredBull++;
   }
-  ok(pressuredBear >= 25, `★ 利好但承压时评级应偏空（40 次中 ${pressuredBear} 次为负）`);
+  ok(pressuredBull >= 35, `★ 利好但承压时机构被标题骗到（新闻因子为正：40 次中 ${pressuredBull} 次）`);
+}
+
+// ★★ 评级不得泄漏大盘方向（第四版核心修复）
+//
+// 走势因子用**绝对涨跌幅**时，评级会退化成"大盘方向指示器"：
+// 实测大盘暴涨月里"看多档"下月上涨比例 97.8%、"看空档"只有 0.8%，
+// 合并 IC = 0.307 —— 玩家扫一眼评级就知道"现在是牛是熊"，
+// 而关卡设计明令**不告诉玩家**年份与风格。
+//
+// 判据：三只股票**同涨同跌**（= 纯大盘行情，相对强弱全为 0）时，
+// 评级只能由噪声决定，因此**不该整齐划一地看空/看多**。
+{
+  const crashBear = []; // 齐跌时被判看空的比例
+  const boomBull = []; // 齐涨时被判看多的比例
+  for (let i = 0; i < 60; i++) {
+    const a = new Institution().rateAll(rateDefs, { [CA]: -8, [CB]: -8, [CC]: -8 }, null);
+    crashBear.push(a.filter((r) => r.rating.key === 'sell' || r.rating.key === 'strong_sell').length / 3);
+    const b = new Institution().rateAll(rateDefs, { [CA]: 8, [CB]: 8, [CC]: 8 }, null);
+    boomBull.push(b.filter((r) => r.rating.key === 'buy' || r.rating.key === 'strong_buy').length / 3);
+  }
+  const avgBear = crashBear.reduce((x, y) => x + y, 0) / crashBear.length;
+  const avgBull = boomBull.reduce((x, y) => x + y, 0) / boomBull.length;
+  // 旧版这两个数都是 1.0（齐跌 → 全部看空）。上限取 0.6 留出充足余量：
+  // 齐跌时相对强弱全为 0，score = 0.60·n，判看空需 n ≤ -0.25 → 理论值 0.375。
+  ok(avgBear < 0.6, `★ 三只齐跌时不得全部看空（实际 ${(avgBear * 100).toFixed(1)}% < 60%）`);
+  ok(avgBull < 0.6, `★ 三只齐涨时不得全部看多（实际 ${(avgBull * 100).toFixed(1)}% < 60%）`);
+}
+
+// ★ 相对强弱必须真的起作用：三只涨跌互不相同时，评级应跟随相对强弱
+//
+// ⚠️ 口径（与第 624 行同一套）：parts.trend 确定性，可以精确断言；
+//   score 含噪声，只能给宽松阈值。
+//   算术：trend 差 2（±1 饱和）× 权重 0.30 = 0.60；
+//   两侧噪声差是 (-2, 2) 上的三角分布，翻盘概率 = P(噪声差 < -1.0) = 12.5%。
+//   所以 40 次里"总分正确排序"的期望是 35 次 —— 阈值取 27（z ≈ -3.8）。
+//   这 12.5% 的翻盘率**就是设计**：机构会看走眼，玩家不能照抄。
+{
+  let trendOrder = 0;
+  let relOk = 0;
+  for (let i = 0; i < 40; i++) {
+    // CA 最强、CB 最弱、CC 居中
+    const rs = new Institution().rateAll(rateDefs, { [CA]: 9, [CB]: -9, [CC]: 0 }, null);
+    const a = rs.find((r) => r.code === CA);
+    const b = rs.find((r) => r.code === CB);
+    if (a.parts.trend > b.parts.trend) trendOrder++;
+    if (a.score > b.score) relOk++;
+  }
+  ok(trendOrder === 40, `★ 相对强弱因子应严格排序（最强 > 最弱：40 次中 ${trendOrder} 次）`);
+  ok(relOk >= 27,
+    `最强股总分应多数时候高于最弱股（40 次中 ${relOk} 次；理论 35 次，`
+    + '约 12% 被噪声翻盘是设计而非缺陷）');
 }
 
 // ---------- 9. 数值平衡校验 ----------

@@ -60,6 +60,7 @@ export { LEVELS, LEVEL_MAP, LEVEL_COUNT, poolOfLevel } from './levels';
 export {
   composeGame,
   composeFromSeason,
+  composeFreshLevel,
   pickSeasons,
   pickStocks,
   buildNewsDeck,

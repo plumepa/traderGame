@@ -18,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { makeAudioContext } from './wx-audio.mjs';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 
@@ -122,6 +124,8 @@ const wx = {
   request() { record('request'); },
   setStorageSync() { record('setStorageSync'); },
   getStorageSync() { return ''; },
+  createInnerAudioContext() { record('createInnerAudioContext'); return makeAudioContext(); },
+  setInnerAudioOption() { record('setInnerAudioOption'); },
   showToast() { record('showToast'); },
   vibrateShort() { record('vibrateShort'); },
 };
@@ -460,14 +464,74 @@ async function main() {
       `现金 ¥${app.bus.portfolio.cash.toFixed(2)} / 资产 ¥${res.total.toFixed(2)}`);
   }
 
-  section('[9] 重开');
+  section('[9] 结算出口（连闯）');
 
-  const restartTapped = tapRestart(app.current);
-  check('命中重开热区', restartTapped);
-  driveFrames(2);
-  check('重开后回到 menu', app.current === app.scenes.menu, '实际 ' + sceneName(app));
-  check('重开后状态已重置', app.bus.phase === 'IDLE' && app.bus.result === null,
-    'phase=' + app.bus.phase + ' result=' + app.bus.result);
+  // ⚠️ 结算页的按钮集合随状态变化（见 result.js 的 actionsOf）：
+  //   普通关 = 进入下一关 / 返回主界面，轮末 = 继续 · 再来五关 / 退市结算，
+  //   破产   = 只有返回主界面。
+  //   所以这里**不能**再假设"最大热区 = 重开" —— 旧版就是这么写的，
+  //   连闯上线后它点到的其实是"进入下一关"，断言随之失效。
+  const resScene = app.current;
+  const exits = (resScene && resScene._buttons ? resScene._buttons : []).map((b) => b.event);
+  const bankrupt = res && res.outcome === 'bankrupt';
+
+  if (bankrupt) {
+    check('破产时只剩"返回主界面"',
+      exits.length === 1 && exits[0] === 'menu', 'exits=' + exits.join(','));
+    tapRect(resScene._buttons[0]);
+    driveFrames(2);
+    check('破产后返回主界面', app.current === app.scenes.menu, '实际 ' + sceneName(app));
+    check('返回后状态已重置', app.bus.phase === 'IDLE' && app.bus.result === null,
+      'phase=' + app.bus.phase + ' result=' + app.bus.result);
+  } else {
+    check('非破产时有两个出口（下一关 / 主界面）',
+      exits.length === 2 && exits.includes('nextLevel') && exits.includes('menu'),
+      'exits=' + exits.join(','));
+
+    // ---- ① 进入下一关：资金必须延续上一关期末资产 ----
+    const prevTotal = res.total;
+    const prevStep = app.bus.stepIndex;
+    const prevCodes = app.bus.stockDefs.map((d) => d.code);
+    const prevUsed = app.bus.usedStockCount();
+
+    tapRect(resScene._buttons.find((b) => b.event === 'nextLevel'));
+    driveFrames(2);
+
+    check('点"进入下一关"后进入新闻插播', app.current === app.scenes.newsflash,
+      '实际 ' + sceneName(app));
+    check('★ 下一关资金 = 上一关期末总资产',
+      Math.abs(app.bus.initCash - prevTotal) < 0.011,
+      `initCash=¥${app.bus.initCash.toFixed(2)} 上关期末=¥${prevTotal.toFixed(2)}`);
+    check('★ 关卡默认初始资金未被污染（LEVELS 是共享对象）',
+      app.bus.level.initCash === 10000, 'level.initCash=¥' + app.bus.level.initCash);
+    check('关卡指针已前进', app.bus.stepIndex === prevStep + 1,
+      `${prevStep} → ${app.bus.stepIndex}`);
+    check('runMode 已开启', app.bus.runMode === true);
+
+    const nextCodes = app.bus.stockDefs.map((d) => d.code);
+    check('★ 下一关股票与上一关不重复',
+      nextCodes.every((c) => !prevCodes.includes(c)),
+      '上关=' + prevCodes.join(',') + ' 本关=' + nextCodes.join(','));
+    check('已用股票池已累计', app.bus.usedStockCount() === prevUsed + nextCodes.length,
+      `${prevUsed} → ${app.bus.usedStockCount()}`);
+
+    // ---- ② 快进到本关结算，再点"返回主界面" ----
+    app.bus.settleTerm();
+    app.switchTo('result');
+    driveFrames(2);
+
+    const back = app.current._buttons.find((b) => b.event === 'menu');
+    check('结算页存在"返回主界面"', !!back);
+    tapRect(back);
+    driveFrames(2);
+    check('点"返回主界面"后回到 menu', app.current === app.scenes.menu,
+      '实际 ' + sceneName(app));
+    check('返回后状态已重置', app.bus.phase === 'IDLE' && app.bus.result === null,
+      'phase=' + app.bus.phase + ' result=' + app.bus.result);
+    check('返回后连闯进度已清空',
+      app.bus.runMode === false && app.bus.usedStockCount() === 0,
+      'runMode=' + app.bus.runMode + ' used=' + app.bus.usedStockCount());
+  }
 
   console.log('\n  轨迹片段: ' + trace.slice(0, 10).join(' → '));
   console.log('  结局: ' + (app.bus.result && app.bus.result.outcome)
@@ -678,10 +742,6 @@ function tapNextMonth(app) {
     });
   }
   return true;
-}
-
-function tapRestart(scene) {
-  return tapHotspot(scene, 0);
 }
 
 /** 买最便宜那只股票的一手，若现金够 */
