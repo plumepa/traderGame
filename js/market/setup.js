@@ -85,6 +85,26 @@ export function pickStocks(n = 3, opts = {}) {
 }
 
 /**
+ * 生成一局的随机标识（seedKey）
+ *
+ * ⚠️ 这里**绝不能**掺 `Date.now()`。
+ *
+ * 曾经是 `g${Date.now()}_${random()}` —— 后果是 `setSeed()` 形同虚设：
+ * 全局种子固定了，但 seedKey 每次运行都不同 → `generatePath` / `rollDelist`
+ * 得到的路径和退市判定每次都不一样 → **平衡测试的"固定种子"根本没生效**，
+ * 断言的观测值在阈值两侧随机跳动（实测破产率 1.0% ~ 2.3% 骑在 2% 的线上）。
+ *
+ * 现在改成**纯随机源**派生：调用 `setSeed()` 后整条链路完全可复现；
+ * 不调 `setSeed()` 时 `random()` 就是 `Math.random()`，
+ * 1e9 的取值空间对"一局一个 key"来说足够唯一。
+ *
+ * @returns {string}
+ */
+function makeSeedKey() {
+  return `g${Math.floor(random() * 1e9)}`;
+}
+
+/**
  * 由「股票列表 + 风格」构造股票定义（含价格路径与退市判定）
  *
  * ★ 抽出来是因为这段逻辑在文件里原本**抄了 3 遍**，
@@ -171,7 +191,7 @@ function buildDefs(stocks, style, seedKey, turns) {
 export function composeFreshLevel(opts = {}) {
   const turns = opts.turns || 12;
   const initCash = typeof opts.initCash === 'number' ? opts.initCash : 10000;
-  const seedKey = opts.seedKey || `g${Date.now()}_${Math.floor(random() * 1e6)}`;
+  const seedKey = opts.seedKey || makeSeedKey();
 
   // ---- ① 风格：池内随机 ----
   let styles = null;
@@ -356,7 +376,7 @@ export function buildNewsDeck(stocks, turns = 12, opts = {}) {
 export function composeFromSeason(season, opts = {}) {
   const turns = opts.turns || 12;
   const initCash = typeof opts.initCash === 'number' ? opts.initCash : 10000;
-  const seedKey = opts.seedKey || `g${Date.now()}_${Math.floor(random() * 1e6)}`;
+  const seedKey = opts.seedKey || makeSeedKey();
   const style = season.style;
 
   const stocks = stocksOfSeason(season);
@@ -402,7 +422,7 @@ export function composeFromSeason(season, opts = {}) {
 export function composeGame(opts = {}) {
   const turns = opts.turns || 12;
   const initCash = typeof opts.initCash === 'number' ? opts.initCash : 10000;
-  const seedKey = opts.seedKey || `g${Date.now()}_${Math.floor(random() * 1e6)}`;
+  const seedKey = opts.seedKey || makeSeedKey();
 
   // ---- 路径 1：直接注入股票（测试用，跳过抽选）----
   if (opts.stocks && opts.stocks.length) {

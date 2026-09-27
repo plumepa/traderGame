@@ -253,6 +253,69 @@ console.log('=== 策略平衡性验证（每种 ' + ROUNDS + ' 局）===\n');
 //    想换一组样本，改这个种子即可。
 setSeed('balance-v1');
 
+// ---- ★ 固定种子必须真的可复现（自检，别信"我设了种子"）----
+//
+// 【真实事故 · 两个 bug 叠在一起，让"固定种子"整整两个版本形同虚设】
+//
+//   ① `setup.js` 生成 seedKey 时掺了 `Date.now()`：
+//        `g${Date.now()}_${Math.floor(random() * 1e6)}`
+//      → 每次运行 seedKey 都不同 → generatePath / rollDelist 结果都不同。
+//
+//   ② `setSeed()` 用 `seed >>> 0`，而测试传的是**字符串**：
+//        `'balance-v1' >>> 0` → `Number('balance-v1')` 是 NaN → `NaN >>> 0` 是 **0**
+//      → 所有字符串种子都退化成同一条序列，"换种子换样本"根本没发生，且不报错。
+//
+//   症状：观测值在阈值两侧随机跳动（破产率 1.0%~2.3% 骑在 2% 的线上），
+//   看起来像"统计噪声"，实际是"种子根本没接上"。
+//
+// 所以这里显式验两次：同一 seed 跑两遍，结果必须逐字符相同。
+// 这条断言是**确定性**的，比任何"看起来差不多"的均值比较都可靠。
+{
+  const snap = () => {
+    setSeed('repro-check');
+    const out = [];
+    for (let i = 0; i < 6; i++) {
+      const bus = new DataBus();
+      // ⚠️ 必须用 startRun 而不是 start：
+      //   DataBus 是**单例**，usedStockCodes 会跨局累积，
+      //   不重置的话第二次快照的排除集已经变了，比出来的差异是假的。
+      bus.startRun('lv_01');
+      out.push(bus.seedKey + '|' + bus.stockDefs.map((d) => d.code).join(',')
+        + '|' + bus.stockDefs.map((d) => (d.delistAt || 0)).join(',')
+        + '|' + bus.stockDefs.map((d) => d.path.slice(0, 3).join('.')).join('/'));
+    }
+    return out.join('\n');
+  };
+  const a = snap();
+  const b = snap();
+  if (a === b) {
+    console.log('✓ 固定种子自检：同一 seed 两次运行结果完全一致');
+  } else {
+    console.log('✗ 固定种子自检：两次运行结果不同 —— setSeed() 没有生效！');
+    console.log('  第一次: ' + a.split('\n')[0]);
+    console.log('  第二次: ' + b.split('\n')[0]);
+    process.exitCode = 1;
+  }
+
+  // 顺带验一下"不同种子必须是不同序列"（防止 hash 退化成常量）
+  setSeed('seed-A');
+  const sa = new DataBus();
+  sa.startRun('lv_01');
+  const keyA = sa.seedKey;
+  setSeed('seed-B');
+  const sb = new DataBus();
+  sb.startRun('lv_01');
+  if (keyA === sb.seedKey) {
+    console.log('✗ 不同 seed 产生了同一个 seedKey —— setSeed 的哈希退化了！');
+    process.exitCode = 1;
+  } else {
+    console.log('✓ 不同 seed 产生不同序列（seed-A vs seed-B）');
+  }
+  console.log('');
+
+  setSeed('balance-v1'); // 复位，避免影响下面的正式统计
+}
+
 console.log('策略            盈利率  破产率  亏损率   平均资产    平均回合  平均磨损');
 console.log('─'.repeat(84));
 
@@ -329,9 +392,19 @@ chk('躺平不动不应破产（不买就没风险）', idleR.bankrupt < 0.01,
 
 // ⚠️ 核心回归：破产判定口径是"总资产"，买入不该误伤
 //（曾因只看现金，导致"定投不卖"100% 破产、"反买差评"99% 破产）
-chk('★ 任何策略都不应因买入而被判破产',
-  all.every((s) => s.bankrupt < 0.02),
-  all.map((s) => (s.bankrupt * 100).toFixed(0) + '%').join(' / '));
+//
+// 阈值 2% → 4%（v5.10）：加上"每月结算后判定"之后，**满仓梭哈类策略**
+// 真的会破产了 —— 那是"亏到连一手都买不起"的真出局，不是误伤。
+// 实测（600 局）：首月梭哈 1.0%~2.3%、换手梭哈 1.0%~1.5%，
+// 正好骑在 2% 这条线上 → 断言会时红时绿。**骑线的阈值比略松的阈值更糟。**
+//
+// 注意这条断言现在只能挡住"灾难性误伤"（原 bug 是 100%/99%，4% 绰绰有余）。
+// "买入动作本身不触发判定"这条**确定性**不变量由 diag-bankrupt.mjs 守着：
+//   [4d] 满仓买入后仍停留在交易页
+//   [4e] 400 局随机开局，第 1 个月结算后 0 局被误判破产
+chk('★ 买入误伤回归：任何策略的破产率都应很低（≤4%，原 bug 是 100%/99%）',
+  all.every((s) => s.bankrupt < 0.04),
+  all.map((s) => (s.bankrupt * 100).toFixed(1) + '%').join(' / '));
 
 chk('★ 正常持仓策略应当能活满 12 个月',
   dcaR.avgTurns >= 11.5 && tpR.avgTurns >= 11.5,

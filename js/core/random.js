@@ -9,12 +9,35 @@ let seeded = false;
 let seedState = 0;
 
 /**
+ * FNV-1a 字符串哈希 —— 把任意字符串种子拍成 32 位整数
+ *
+ * ⚠️ 为什么不能直接 `seed >>> 0`：对**字符串**做位运算会先 `ToNumber`，
+ *   而 `Number('balance-v1')` 是 `NaN`，`NaN >>> 0` 是 **0**。
+ *   于是 `setSeed('balance-v1')` 与 `setSeed('repro-check')` 与
+ *   `setSeed(0)` 得到的是**同一条随机序列** —— 测试里"换个种子换一组样本"
+ *   实际上什么都没换（而且不会报错）。
+ * @param {string} str
+ * @returns {number} 32 位无符号整数
+ */
+function hashStr(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/**
  * 设置随机种子 —— 使随机可复现（调试用）
- * @param {number} seed 任意整数
+ *
+ * 接受**数字或字符串**。字符串会走 FNV-1a 哈希，
+ * 所以 `setSeed('balance-v1')` 与 `setSeed('balance-v2')` 是两条不同序列。
+ * @param {number|string} seed
  */
 export function setSeed(seed) {
   seeded = true;
-  seedState = seed >>> 0;
+  seedState = typeof seed === 'number' ? seed >>> 0 : hashStr(String(seed));
 }
 
 /**
