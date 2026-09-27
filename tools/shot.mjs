@@ -241,6 +241,36 @@ while (!app.bus.isBlockEnd() && lv++ < 8) {
 app._frame(16);
 grab('结算 · 轮末', '轮末多两个选择：继续 · 再来五关（主）/ 退市结算（次）');
 
+// ---- 破产页：手里只剩 ¥800，连一手都买不起 ----
+//
+// ⚠️ 这张图是「玩家不会破产」那个 bug 的**验收画面**。
+//   修复前：退市股的清算价（¥0.8 的仙股）被算进"最低价"，
+//   破产线被压到 ¥80，于是这一局根本不会出结算页 —— 抓不到这张图。
+//   修复后：破产线 = 可交易股票里最便宜的一手（¥1577），¥800 < ¥1577 → 出局。
+//
+//   顺带验证失败原因**换行**：文案里要同时写出"总资产"和"一手成本"
+//   两个数字，中文 35 字上下，单行会画到屏幕外。
+app.bus.reset();
+app.switchTo('menu');
+app._frame(16);
+tapRect(app.menu._btn);
+app._frame(16);
+app._frame(16);
+
+const doomed = app.bus.stockDefs[0];
+doomed.delistAt = 1;
+doomed.delistPrice = 0.8;
+app.bus.stockDefs.forEach((d) => {
+  if (d.code !== doomed.code) app.bus.simulator.states[d.code].price = 15;
+});
+app.bus.portfolio.cash = 800;
+app.bus.portfolio.positions = {};
+
+tapAt(DEVICE.W / 2, DEVICE.H / 2); // 关新闻 → 本月结算（退市）→ 判定破产
+app._frame(16);
+app._frame(16);
+grab('结算 · 破产', '失败原因换行显示总资产 vs 一手成本；出口只剩"返回主界面"');
+
 // ============================================================
 // 生成 HTML
 // ============================================================

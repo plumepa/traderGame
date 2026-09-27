@@ -54,6 +54,15 @@ const FINAL_SUBTITLES = {
 const ROW_H = 28;
 
 /**
+ * 失败原因的行高
+ *
+ * ⚠️ 原因文案**必须换行**，不能再用单行 text()。
+ *   破产文案要写清"总资产 vs 一手成本"两个数字，中文 30~40 字，
+ *   375 宽的屏幕一行只放得下约 29 字 —— 单行会直接画到屏幕外。
+ */
+const REASON_LINE_H = 18;
+
+/**
  * 本关结束时玩家能做什么
  *
  * 三档，互斥：
@@ -262,8 +271,15 @@ export default class ResultScene extends Scene {
     const panelH = this._panelHeight(res);
     let y = panelY + panelH + 18;
 
-    const reasonY = res.reason ? y + 4 : null;
-    if (res.reason) y += 26;
+    // ---- 失败原因：按**实际换行后**的行数占位 ----
+    //
+    // ⚠️ 不能再写死 `y += 26`：破产文案会换成 2~3 行，
+    //   写死单行高度会让走势图压在文字上。
+    const reasonLines = res.reason
+      ? wrapLines(res.reason, pw - 8, { size: FONT.size.xs }).length
+      : 0;
+    const reasonY = reasonLines ? y + 4 : null;
+    if (reasonLines) y += reasonLines * REASON_LINE_H + 10;
 
     const trendTitleY = y + 4;
     y += 20;
@@ -287,7 +303,7 @@ export default class ResultScene extends Scene {
       top, bottom, px, pw,
       titleY, subY, levelY, subLines,
       panelY, panelH,
-      reasonY, trendTitleY, legendY,
+      reasonY, reasonLines, trendTitleY, legendY,
       chartY, chartH, seriesCount, showChart,
       buttons,
       btn: buttons[0],
@@ -399,9 +415,9 @@ export default class ResultScene extends Scene {
       ry += ROW_H;
     });
 
-    // ---- 失败原因 ----
-    if (res.reason && flow.reasonY !== null) {
-      text(res.reason, flow.px + 4, flow.reasonY, {
+    // ---- 失败原因（可换行；行数由 _flow 统一算过）----
+    if (flow.reasonY !== null && flow.reasonLines) {
+      textWrap(res.reason, flow.px + 4, flow.reasonY, flow.pw - 8, REASON_LINE_H, {
         size: FONT.size.xs,
         color: PALETTE.textDim,
       });

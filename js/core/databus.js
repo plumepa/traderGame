@@ -6,6 +6,7 @@
 
 import Simulator from '../market/simulator';
 import Portfolio from '../market/portfolio';
+import { LOT_SIZE, costToBuy, calcFee } from '../market/order';
 import Dispatcher from '../news/dispatcher';
 import Institution from '../news/institution';
 import {
@@ -316,7 +317,7 @@ class DataBus {
   }
 
   /**
-   * 破产判定：总资产 < 最低股价 × 100（连一手都买不起）
+   * 破产判定：总资产 < 最便宜的一手成本（连一手都买不起）
    *
    * ⚠️ 判定口径是**总资产**（现金 + 持仓市值），不是现金。
    *
@@ -324,19 +325,55 @@ class DataBus {
    * 回合末立刻被判破产 —— 等于惩罚正常买入。持仓是能卖成钱的，
    * 必须计入。只有总资产连一手都买不起，才真的无翻盘手段。
    *
+   * ⚠️ 另一处曾经把游戏判死的 bug 在**分子之外**：破产线本身算错了。
+   *   见 Simulator.lowestPrice() 的注释 —— 它把已退市股票（清算价
+   *   ¥0.5~1.7 的仙股）也算进"最低价"，把破产线压到 ¥50~170，
+   *   于是"手里剩 ¥800、三只票一手都买不起"也判不破产。
+   *
+   * 判定时机（缺一不可，见 main.js 的 checkBankrupt）：
+   *   ① 每月价格结算后（含"股票退市后"这一特殊时刻）
+   *   ② 玩家卖出后
+   *   ③ 每关开始前（起始资金够不够买一手）
+   *
    * @returns {boolean}
    */
   isBankrupt() {
-    const lowest = this.simulator.lowestPrice();
-    const total = this.portfolio.totalAssets(this.priceMap);
-    return total < lowest * 100;
+    return this.portfolio.totalAssets(this.priceMap) < this.bankruptLine();
   }
 
   /**
-   * 破产线金额（最低一手成本）
+   * ★ 最便宜的一手成本 —— 破产线
+   *
+   * 口径 = `costToBuy(可交易股票中的最低价, 一手)`，**含最低 ¥5 佣金**。
+   *
+   * 为什么必须含佣金：判定问的是"买得起吗"，而"买得起"的准确定义是
+   * `costToBuy(price, 100) <= 现金`。裸价 × 100 会漏掉那 ¥5，
+   * 于是在 `现金 ∈ [价×100, 价×100+5)` 这个区间里，
+   * 玩家明明下不了单，判定却说"你还有钱"。
+   *
+   * 没有可交易股票时返回 `Infinity` —— 没有任何标的能买，
+   * 总资产必然 < Infinity，`isBankrupt()` 自然为真。
+   * （正常关卡不会出现：setup.buildDefs 保底"一局最多一只退市股"。）
+   *
+   * @returns {number} 一手成本（可能为 Infinity）
+   */
+  cheapestLotCost() {
+    const prices = this.simulator.tradablePrices();
+    if (!prices.length) return Infinity;
+    let min = Infinity;
+    prices.forEach((p) => {
+      const c = costToBuy(p, LOT_SIZE);
+      if (c < min) min = c;
+    });
+    return min;
+  }
+
+  /**
+   * 破产线金额（= 最便宜的一手成本）
+   * @returns {number} 可能为 Infinity（已无可交易股票）
    */
   bankruptLine() {
-    return this.simulator.lowestPrice() * 100;
+    return this.cheapestLotCost();
   }
 
   /**
@@ -352,7 +389,8 @@ class DataBus {
    */
   wouldBankruptAfterBuy(code, price, shares) {
     const amount = price * shares;
-    const fee = Math.max(amount * 0.0003, amount > 0 ? 5 : 0);
+    // 手续费与撮合口径同源（order.calcFee），不另抄一份费率
+    const fee = calcFee(amount, 'buy');
     const afterTotal = this.portfolio.totalAssets(this.priceMap) - fee;
     const line = this.bankruptLine();
     return { afterTotal, line, wouldBankrupt: afterTotal < line };

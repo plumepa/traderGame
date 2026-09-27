@@ -691,6 +691,140 @@ section('[5] 结算场景版面（连闯：一或两个出口）');
 }
 
 // ============================================================
+section('[6] 结算页「失败原因」换行（破产文案有 30~40 字）');
+
+{
+  const { default: ResultScene } = await import(new URL('js/scenes/result.js', ROOT).href);
+  const { bindContext } = await import(new URL('js/styles/widgets.js', ROOT).href);
+  const { setSafeArea } = await import(new URL('js/styles/layout.js', ROOT).href);
+
+  // 先给全局 wx 打桩，main.js 的依赖链（audio/bgm/scenes）才加载得动
+  installWx(375, 667, 20);
+  const { default: Main } = await import(new URL('js/main.js', ROOT).href);
+
+  // ★ 文案**直接取自生产代码**（Main.prototype._bankruptReason），不手抄。
+  //   手抄的文案在改实现时会静默失效 —— 测试还在，验的却是旧字符串。
+  const fake = (ev) => ({ bus: { latestDelistEvent: () => ev } });
+  const CASES = [
+    {
+      tag: '开局资金不足',
+      reason: Main.prototype._bankruptReason.call(fake(null), 'start', 800, 1405),
+    },
+    {
+      tag: '退市清算（有持仓）',
+      reason: Main.prototype._bankruptReason.call(
+        fake({ name: '云岭老窖', held: true }), 'settle', 800, 1577,
+      ),
+    },
+    {
+      tag: '退市（未持仓）',
+      reason: Main.prototype._bankruptReason.call(
+        fake({ name: '云岭老窖', held: false }), 'settle', 800, 905,
+      ),
+    },
+    {
+      tag: '卖出后',
+      reason: Main.prototype._bankruptReason.call(fake(null), 'sell', 300, 605),
+    },
+    {
+      tag: '无可交易标的（Infinity）',
+      reason: Main.prototype._bankruptReason.call(fake(null), 'settle', 800, Infinity),
+    },
+  ];
+
+  /** 按"中文 1 字宽 / 西文 0.62 字宽"估算绘制宽度 */
+  function approxW(str, size) {
+    let w = 0;
+    for (const ch of String(str)) w += isWide(ch) ? size : size * 0.62;
+    return w;
+  }
+
+  function makeBankruptBus(reason) {
+    const defs = [
+      { code: '900101', name: '甲股', sector: 'a' },
+      { code: '900102', name: '乙股', sector: 'b' },
+      { code: '900103', name: '丙股', sector: 'c' },
+    ];
+    const hist = {};
+    defs.forEach((d) => {
+      hist[d.code] = Array.from({ length: 13 }, (_, i) => ({ price: 10 + i }));
+    });
+    return {
+      runMode: false,
+      roundIndex: 0,
+      stepIndex: 0,
+      runResults: [],
+      initCash: 800,
+      level: { id: 'lv_01', index: 1, turns: 12, initCash: 800 },
+      stockDefs: defs,
+      simulator: { historyOf: (c) => hist[c] || [] },
+      result: {
+        outcome: 'bankrupt',
+        reason,
+        total: 800,
+        init: 800,
+        profit: 0,
+        returnRate: 0,
+        // ★ 开局即破产时 turn = 0 —— 结算页要能显示「存活月份 0 / 12」而不炸
+        turns: 0,
+        liquidation: null,
+        delistEvents: [],
+      },
+      levelPosition: () => ({ index: 1, total: 5, step: 1, round: 1, blockTotal: 5 }),
+      isBlockEnd: () => false,
+      canContinue: () => false,
+    };
+  }
+
+  [
+    { name: 'iPhone 15 Pro', W: 393, H: 852, safeTop: 59 },
+    { name: '小屏 320×568', W: 320, H: 568, safeTop: 20 },
+  ].forEach(({ name, W, H, safeTop }) => {
+    installWx(W, H, safeTop);
+    setSafeArea(globalThis.wx.getSystemInfoSync());
+    bindContext(makeCtx2D(W, H));
+
+    CASES.forEach(({ tag, reason }) => {
+      const bus = makeBankruptBus(reason);
+      const scene = new ResultScene(bus);
+      const flow = scene._flow(W, H);
+      const label = `${name} / ${tag}`;
+
+      // ① 真的换行了 —— 否则本节等于没验到东西
+      check(`${label}：★ 长文案被拆成多行（否则本节是空转）`,
+        flow.reasonLines >= 2, `reasonLines=${flow.reasonLines} 字数=${reason.length}`);
+
+      // ② 换行后的原因不压住走势图标题
+      const reasonBottom = flow.reasonY + (flow.reasonLines - 1) * 18;
+      check(`${label}：原因文字不压住走势图标题`,
+        reasonBottom <= flow.trendTitleY,
+        `原因底=${reasonBottom} 标题=${flow.trendTitleY}`);
+
+      // ③ ★ 核心回归：每一行都画在画布内。
+      //    修复前用的是单行 text()，35 字的破产文案会直接画到屏幕外
+      //    （375 宽的屏一行只放得下约 29 字）。
+      texts = [];
+      scene.render(makeCtx2D(W, H), W, H);
+      const drawn = texts.filter((t) => t.str && t.str.length > 1 && reason.includes(t.str));
+      const overflow = drawn.filter((t) => t.x + approxW(t.str, t.size) > W);
+
+      check(`${label}：★ 原因按换行逐行绘制（不是一行硬画）`,
+        drawn.length >= 2, `画出 ${drawn.length} 行`);
+      check(`${label}：★ 每一行都在画布内（修复前会溢出屏幕）`,
+        overflow.length === 0,
+        overflow.map((t) => `"${t.str}" 右缘=${(t.x + approxW(t.str, t.size)).toFixed(0)}`).join(' | '));
+
+      // ④ 走势图要么画得完整，要么整块不画
+      check(`${label}：走势图要么完整要么整块不画`,
+        flow.showChart
+          ? flow.chartY + flow.chartH <= flow.btn.y - 14 + 0.01
+          : flow.chartH === 0,
+        `showChart=${flow.showChart} chartH=${flow.chartH} btnY=${flow.btn.y}`);
+    });
+  });
+}
+
+// ============================================================
 console.log('\n=== 结果 ===');
 if (failed) {
   console.log(`通过 ${passed} 项，失败 ${failed} 项`);

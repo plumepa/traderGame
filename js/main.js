@@ -18,10 +18,19 @@
  *   结算 final     → finalSettle()        汇总整轮战绩，runMode 关闭
  *   结算 menu      → reset() → 主菜单      放弃本轮
  *
- * 破产判定口径：总资产（现金 + 持仓市值）< 最低一手成本。
- *   - 买入后不判（只是把钱换成股票，总资产几乎不变，给玩家整月调整）
- *   - 卖出后判
+ * 破产判定口径：总资产（现金 + 持仓市值）< 最便宜的一手成本（含 ¥5 佣金）。
+ *   判定时机有三个，缺一不可（见 checkBankrupt）：
+ *     ① 每月价格结算后 —— 尤其是**股票退市清算后**那一刻：
+ *        退市会强制清算持仓，可买标的变少，一手成本反而抬高
+ *     ② 玩家卖出后 —— 卖出可能让现金回升，也可能已无翻盘手段
+ *     ③ 每关开始前 —— 连闯的本金是上一关的期末资产，可能已经不够一手
+ *   买入后**不**判（买入只是把钱换成股票，总资产几乎不变，给玩家整月调整）
  * 到期结算：先强制平仓（持仓按市价卖出），再用纯现金判 win / lose。
+ *
+ * ⚠️ 曾经只有 ② 这一个判定点，于是"从不卖出的玩家永远不会破产"：
+ *   实测「手里剩 ¥800、三只票一手都买不起」也不出局。
+ *   根因有两层：判定点缺失，以及 bankruptLine() 把退市仙股算进了最低价
+ *   （见 Simulator.lowestPrice）。
  */
 
 import DataBus from './core/databus';
@@ -75,12 +84,16 @@ export default class Main {
   _bindEvents() {
     // 菜单 → 开局（连闯第 1 关，资金取关卡默认初始资金）
     this.menu.on('startGame', (levelId) => {
-      if (this.bus.startRun(levelId)) {
-        // 开局即进入第 1 月
-        this._beginTurn();
-      } else {
+      if (!this.bus.startRun(levelId)) {
         console.error('开局失败，数据校验错误：', this.bus.errors);
+        return;
       }
+      // ★ 判定时机 ③：开局资金够不够买一手。
+      //   菜单关卡的本金是 ¥10000，远高于任何一手成本，正常不会触发；
+      //   但"进入下一关"走的是同一条判定（见 result.on('nextLevel')）。
+      if (this.checkBankrupt('start')) return;
+      // 开局即进入第 1 月
+      this._beginTurn();
     });
 
     // 下月 → 插播新闻
@@ -88,19 +101,27 @@ export default class Main {
       this._advanceTurn();
     });
 
-    // 卖出后 → 重新判定（卖出可能让现金回升，也可能已无翻盘手段）
+    // ★ 判定时机 ②：卖出后 —— 卖出可能让现金回升，也可能已无翻盘手段
     this.trading.on('afterTrade', () => {
-      this.checkBankrupt();
+      this.checkBankrupt('sell');
     });
 
     // 新闻关闭 → 回到交易
     this.newsflash.on('closed', () => {
-      this.switchTo('trading');
       // ⚠️ 这里**只**做「进入本月交易」的准备工作，不做任何到期判定。
       //   曾经这里调用 _settleAndJudge()，导致 12 月新闻一关就立刻结算
       //   ——玩家根本没机会做 12 月的交易，观感上就是"关卡提前结束了"。
       //   到期判定改由 _advanceTurn()（玩家点"结束本年 ▶ 结算"）触发。
       this._enterTrading();
+
+      // ★ 判定时机 ①：本月价格结算后。
+      //   包含"股票退市清算后"这一特殊时刻 —— 退市会强制清算持仓，
+      //   可买标的从 3 只减到 2 只，一手成本反而抬高，
+      //   玩家可能在这一刻就买不起任何股票了。
+      //   ⚠️ 必须在 switchTo('trading') **之前**判：破产了就不该再进交易页。
+      if (this.checkBankrupt('settle')) return;
+
+      this.switchTo('trading');
     });
 
     // ---- 结算场景的三个出口（见 result.js 的 actionsOf）----
@@ -110,11 +131,15 @@ export default class Main {
     //    settleTerm() 已强制平仓，所以上一关期末是纯现金，
     //    startNextLevel() 直接把它当下一关的 initCash，不需要搬运持仓。
     this.result.on('nextLevel', () => {
-      if (this.bus.startNextLevel()) {
-        this._beginTurn();
-      } else {
+      if (!this.bus.startNextLevel()) {
         console.error('进入下一关失败：', this.bus.errors);
+        return;
       }
+      // ★ 判定时机 ③：上一关的期末资产够不够买新一关的一手。
+      //   这是"手里剩 ¥800"最容易被逮到的时刻 —— 钱是上一关亏剩下的，
+      //   而新一关的三只股票可能一手都买不起。
+      if (this.checkBankrupt('start')) return;
+      this._beginTurn();
     });
 
     // ② 返回主界面 —— 放弃本轮连闯，进度清零
@@ -204,13 +229,17 @@ export default class Main {
    * 进入本回合的交易环节 —— 新闻关闭后调用
    *
    * 只负责价格结算 + 生成评级，让玩家开始操作。
-   * **不做**到期/破产判定：那两件事属于"离开本回合"的时机，
+   * **不做**到期判定：那件事属于"离开本回合"的时机，
    * 放在这里会让最后一个月的交易界面被瞬间跳过。
+   *
+   * ⚠️ 破产判定也**不在**这里做 —— 它由调用方 `newsflash.on('closed')`
+   *   在本函数之后调用 `checkBankrupt('settle')`。之所以拆开：
+   *   破产要把场景切到结算页，而本函数是纯数据操作、不碰场景。
    */
   _enterTrading() {
     const bus = this.bus;
 
-    bus.settle();            // ① 价格结算（本月涨跌）
+    bus.settle();            // ① 价格结算（本月涨跌，含退市清算）
     bus.generateRatings();   // ② 机构评级
     bus.phase = 'TRADING';
   }
@@ -230,25 +259,73 @@ export default class Main {
   /**
    * 破产判定 —— 统一入口
    *
-   * 判定口径：总资产（现金 + 持仓市值）< 最低一手成本。
+   * 判定口径：总资产（现金 + 持仓市值）< 最便宜的一手成本（含 ¥5 佣金）。
    * 买入后**不**立即判定（买入只是把钱换成股票，总资产几乎不变，
-   * 该给玩家一整月时间调整）；卖出后判定。
+   * 该给玩家一整月时间调整）；其余三个时机都判：
    *
+   *   'settle' —— 每月价格结算后（调用点在 newsflash 关闭时）
+   *               ★ 退市当月会自动改写成"退市清算"的文案：
+   *                 用 `latestDelistEvent()` 识别，而不是另开一个判定点，
+   *                 因为退市本来就是在 settle() 里发生的。
+   *   'sell'   —— 玩家卖出后
+   *   'start'  —— 每关开始前（起始资金够不够买一手）
+   *
+   * @param {'settle'|'sell'|'start'} [trigger='settle'] 触发时机（只影响文案）
    * @returns {boolean} 是否已判定破产并跳转
    */
-  checkBankrupt() {
+  checkBankrupt(trigger = 'settle') {
     const bus = this.bus;
     if (bus.phase === 'OVER') return false;
     if (!bus.isBankrupt()) return false;
 
     const total = bus.portfolio.totalAssets(bus.priceMap);
     const line = bus.bankruptLine();
-    bus.finish(
-      'bankrupt',
-      `总资产 ¥${total.toFixed(0)} 已低于一手成本 ¥${line.toFixed(0)}，你被市场清出了牌桌。`,
-    );
+    bus.finish('bankrupt', this._bankruptReason(trigger, total, line));
     this.switchTo('result');
     return true;
+  }
+
+  /**
+   * 破产文案 —— 按触发时机（以及当月有没有退市）分别措辞
+   *
+   * 破产线可能是 `Infinity`（三只股票全部退市，已无可交易标的），
+   * 此时不能写 `¥Infinity`，要说人话。
+   *
+   * @param {'settle'|'sell'|'start'} trigger
+   * @param {number} total 当前总资产
+   * @param {number} line 一手成本（可能为 Infinity）
+   * @returns {string}
+   */
+  _bankruptReason(trigger, total, line) {
+    const noTarget = !Number.isFinite(line);
+    const cost = `¥${line.toFixed(0)}`;
+
+    if (trigger === 'start') {
+      return noTarget
+        ? '本关已没有可交易的股票，你被挡在了场外。'
+        : `本关起始资金 ¥${total.toFixed(0)} 连最便宜的一手（${cost}）都买不起，`
+          + '你被挡在了场外。';
+    }
+
+    if (trigger === 'sell') {
+      return noTarget
+        ? `卖出后总资产 ¥${total.toFixed(0)}，市场上已无可交易的标的，你被清出了牌桌。`
+        : `卖出后总资产 ¥${total.toFixed(0)} 已低于一手成本 ${cost}，你被市场清出了牌桌。`;
+    }
+
+    // settle：当月有退市 → 用"退市清算"的措辞（这是玩家最需要看懂的一种死法）
+    const ev = this.bus.latestDelistEvent();
+    if (noTarget) {
+      return `本月结算后总资产 ¥${total.toFixed(0)}，市场上已无可交易的标的，你被清出了牌桌。`;
+    }
+    if (ev) {
+      return ev.held
+        ? `${ev.name} 退市爆雷，持仓被强制清算；总资产 ¥${total.toFixed(0)} `
+          + `已买不起任何一手（最便宜的一手 ${cost}）。`
+        : `${ev.name} 本月退市；总资产 ¥${total.toFixed(0)} 已买不起任何一手`
+          + `（最便宜的一手 ${cost}）。`;
+    }
+    return `本月结算后总资产 ¥${total.toFixed(0)} 已低于一手成本 ${cost}，你被市场清出了牌桌。`;
   }
 
   // ============ 主循环 ============
