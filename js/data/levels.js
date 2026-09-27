@@ -46,6 +46,19 @@
  *             连闯时后续关卡的钱来自上一关期末资产（DataBus.startNextLevel
  *             把 result.total 当 initCash 传下去），这个字段**不再**代表
  *             本关的本金 —— 所以结算页显示的是 bus.initCash，不是 level.initCash。
+ *
+ *             【为什么是 ¥6000，不是 ¥10000】
+ *             破产线 = "最便宜那只票的一手成本（含 ¥5 最低佣金）"，
+ *             实测中位数只有 ¥805 —— 也就是**本金的 8.1%**。
+ *             换句话说，¥10000 本金下玩家要亏掉 **92%** 才会被判破产，
+ *             而"梭哈一只票、它退市了"这个最惨结局的残值恰好也在 ¥700~900，
+ *             正好**骑在破产线上**：擦着线活下来，只剩几百块继续空转。
+ *             这就是"好难破产"的根因。
+ *             降到 ¥6000 后破产线占本金 13.4%（需亏 87%），实测
+ *             单关破产率 1.23% → 1.84%、连闯一整轮 20.3% → 25.5%。
+ *             下限是 ¥3410（= 最贵那只 ¥34 × 100 + ¥5 佣金），
+ *             再低就会有股票在开局就买不起，破坏"每只票都买得起"的设计。
+ *             详见 DEV-TASKS §十一。
  *   goal      目标（无硬性通关目标，到期结算）
  *
  * ⚠️ LEVELS 是**共享对象数组**，任何关卡代码都不得改写 level.initCash
@@ -59,11 +72,11 @@ export const LEVELS = [
     index: 1,
     title: '第 1 关 · 初入市场',
     intro:
-      '营业部门口排着长队，连卖茶叶蛋的大妈都在谈论股票。\n你没做过功课，只揣着一万块钱挤进人群。\n\n没人告诉你这是什么时候，也没人告诉你接下来会怎样——\n自己看盘，自己判断。',
+      '营业部门口排着长队，连卖茶叶蛋的大妈都在谈论股票。\n你没做过功课，只揣着六千块钱挤进人群。\n\n没人告诉你这是什么时候，也没人告诉你接下来会怎样——\n自己看盘，自己判断。',
     style: 'smallBull',
     pool: ['smallBull', 'bull'],
     turns: 12,
-    initCash: 10000,
+    initCash: 6000,
     goal: { type: 'term', value: 0, desc: '先学会看盘：在一年的交易里尽量赚得更多' },
   },
   {
@@ -75,7 +88,7 @@ export const LEVELS = [
     style: 'smallBear',
     pool: ['smallBear', 'bear'],
     turns: 12,
-    initCash: 10000,
+    initCash: 6000,
     goal: { type: 'term', value: 0, desc: '在下跌中活下来，并尽量保住本金' },
   },
   {
@@ -87,7 +100,7 @@ export const LEVELS = [
     style: 'flat',
     pool: ['flat', 'calmFlat'],
     turns: 12,
-    initCash: 10000,
+    initCash: 6000,
     goal: { type: 'term', value: 0, desc: '在没有趋势的市场里跑赢大盘' },
   },
   {
@@ -99,7 +112,7 @@ export const LEVELS = [
     style: 'flat',
     pool: ['smallBull', 'smallBear', 'flat', 'calmFlat'],
     turns: 12,
-    initCash: 10000,
+    initCash: 6000,
     goal: { type: 'term', value: 0, desc: '在风格不明的市场里做对判断' },
   },
   {
@@ -116,7 +129,7 @@ export const LEVELS = [
     //    pool 为 null 时不得用 style 去缩小候选 —— 曾因此把本关压成"只能抽 flat"。
     pool: null,
     turns: 12,
-    initCash: 10000,
+    initCash: 6000,
     goal: { type: 'term', value: 0, desc: '什么都可能发生——尽力而为' },
   },
 ];

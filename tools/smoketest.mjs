@@ -503,7 +503,7 @@ async function main() {
       Math.abs(app.bus.initCash - prevTotal) < 0.011,
       `initCash=¥${app.bus.initCash.toFixed(2)} 上关期末=¥${prevTotal.toFixed(2)}`);
     check('★ 关卡默认初始资金未被污染（LEVELS 是共享对象）',
-      app.bus.level.initCash === 10000, 'level.initCash=¥' + app.bus.level.initCash);
+      app.bus.level.initCash === 6000, 'level.initCash=¥' + app.bus.level.initCash);
     check('关卡指针已前进', app.bus.stepIndex === prevStep + 1,
       `${prevStep} → ${app.bus.stepIndex}`);
     check('runMode 已开启', app.bus.runMode === true);

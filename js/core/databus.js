@@ -588,7 +588,7 @@ class DataBus {
   finish(outcome, reason) {
     const total = this.portfolio.totalAssets(this.priceMap);
     // ★ 用 this.initCash（本关起始资金），**不是** this.level.initCash。
-    //   连闯时本关是从上一关的期末资产起步的，关卡默认的 ¥10000 已经不代表本金。
+    //   连闯时本关是从上一关的期末资产起步的，关卡默认的 ¥6000 已经不代表本金。
     const init = this.initCash;
     this.result = {
       outcome,

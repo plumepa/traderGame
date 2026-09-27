@@ -197,9 +197,9 @@ console.log('[4] ★ 资金延续');
   bus.portfolio.buy(cheapest.code, cheapest.basePrice, 100);
   const res1 = playToEnd();
 
-  ok(Math.abs(res1.total - 10000) > 0.01,
-    `★ 期末资产应因持仓涨跌而变化（实际 ¥${res1.total.toFixed(2)}，起始 ¥10000）`);
-  ok(res1.init === 10000, `第 1 关的本金应是 ¥10000（实际 ¥${res1.init}）`);
+  ok(Math.abs(res1.total - 6000) > 0.01,
+    `★ 期末资产应因持仓涨跌而变化（实际 ¥${res1.total.toFixed(2)}，起始 ¥6000）`);
+  ok(res1.init === 6000, `第 1 关的本金应是 ¥6000（实际 ¥${res1.init}）`);
 
   ok(bus.startNextLevel(), '应能进入第 2 关');
   ok(Math.abs(bus.initCash - res1.total) < 0.01,
@@ -209,7 +209,7 @@ console.log('[4] ★ 资金延续');
   ok(bus.portfolio.positions && Object.keys(bus.portfolio.positions).length === 0,
     '★ 新一关应空仓开始（上一关年末已强制平仓，不搬持仓）');
 
-  // 第 2 关的本金基准应是"上一关的钱"，不是关卡默认的 ¥10000
+  // 第 2 关的本金基准应是"上一关的钱"，不是关卡默认的 ¥6000
   const res2 = playToEnd();
   ok(Math.abs(res2.init - res1.total) < 0.01,
     `★ 第 2 关的收益率基准应继承第 1 关期末资产（期望 ¥${res1.total.toFixed(2)}，实际 ¥${res2.init.toFixed(2)}）`);
@@ -359,14 +359,14 @@ console.log('[7] ★ 起点推导与退市结算');
   ok(!!fin, 'finalSettle 应返回结算结果');
   ok(fin.isFinal === true, '结算结果应标记 isFinal');
   ok(fin.levels === 3, `应记录连闯关数 3（实际 ${fin.levels}）`);
-  ok(Math.abs(fin.init - 10000) < 0.01,
-    `★ 整轮本金应是第 1 关起始资金 ¥10000（实际 ¥${fin.init}）`);
+  ok(Math.abs(fin.init - 6000) < 0.01,
+    `★ 整轮本金应是第 1 关起始资金 ¥6000（实际 ¥${fin.init}）`);
   ok(Math.abs(fin.total - r3.total) < 0.01,
     `期末总资产应等于末关期末资产（期望 ¥${r3.total.toFixed(2)}，实际 ¥${fin.total.toFixed(2)}）`);
   ok(fin.turns === 36, `★ 累计月份应是各关之和 36（实际 ${fin.turns}）`);
-  ok(Math.abs(fin.profit - (r3.total - 10000)) < 0.01,
+  ok(Math.abs(fin.profit - (r3.total - 6000)) < 0.01,
     '★ 净盈亏应按"整轮本金"算，不是按末关本金算');
-  ok(fin.outcome === (r3.total > 10000 ? 'win' : 'lose'),
+  ok(fin.outcome === (r3.total > 6000 ? 'win' : 'lose'),
     `结局应按整轮盈亏判定（实际 ${fin.outcome}）`);
   ok(typeof fin.reason === 'string' && fin.reason.includes('连闯 3 关'),
     `结算文案应写明连闯关数（实际 ${fin.reason}）`);

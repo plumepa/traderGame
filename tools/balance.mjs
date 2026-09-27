@@ -419,7 +419,7 @@ chk('不同策略的最终资产有显著差异（≥¥800）',
   ' 最低 ¥' + Math.min(...all.map((s) => s.avgTotal)).toFixed(0));
 
 chk('最优策略平均资产明显高于本金',
-  Math.max(...all.map((s) => s.avgTotal)) > 10000 * 1.08,
+  Math.max(...all.map((s) => s.avgTotal)) > 6000 * 1.08,
   '最高 ¥' + Math.max(...all.map((s) => s.avgTotal)).toFixed(0));
 
 chk('存在会亏钱的错误策略（有惩罚）',

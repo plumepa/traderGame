@@ -181,7 +181,7 @@ function buildDefs(stocks, style, seedKey, turns) {
  *
  * @param {object} opts
  * @param {number} [opts.turns=12] 回合数
- * @param {number} [opts.initCash=10000] 本关起始资金（跑关时是上一关的期末资产）
+ * @param {number} [opts.initCash=6000] 本关起始资金（跑关时是上一关的期末资产）
  * @param {string[]|'all'} [opts.styles] 本关可抽的风格池
  * @param {string} [opts.style] 兜底单值（仅当没有 styles 数组时使用）
  * @param {string[]} [opts.excludeStocks] **必须排除**的股票代码（跨关不重复）
@@ -190,7 +190,7 @@ function buildDefs(stocks, style, seedKey, turns) {
  */
 export function composeFreshLevel(opts = {}) {
   const turns = opts.turns || 12;
-  const initCash = typeof opts.initCash === 'number' ? opts.initCash : 10000;
+  const initCash = typeof opts.initCash === 'number' ? opts.initCash : 6000;
   const seedKey = opts.seedKey || makeSeedKey();
 
   // ---- ① 风格：池内随机 ----
@@ -370,12 +370,12 @@ export function buildNewsDeck(stocks, turns = 12, opts = {}) {
  * @param {object} opts
  * @param {number} [opts.turns=12]
  * @param {string} [opts.seedKey]
- * @param {number} [opts.initCash=10000]
+ * @param {number} [opts.initCash=6000]
  * @returns {object} { seedKey, style, turns, initCash, stockDefs, newsDeck, seasonId, seasonLabel }
  */
 export function composeFromSeason(season, opts = {}) {
   const turns = opts.turns || 12;
-  const initCash = typeof opts.initCash === 'number' ? opts.initCash : 10000;
+  const initCash = typeof opts.initCash === 'number' ? opts.initCash : 6000;
   const seedKey = opts.seedKey || makeSeedKey();
   const style = season.style;
 
@@ -414,14 +414,14 @@ export function composeFromSeason(season, opts = {}) {
  *                               数组表示只在这些风格里抽（优先于 opts.style）。
  *                               关卡就是用它来表达"本关可抽哪几种年景"。
  * @param {string} [opts.seedKey]
- * @param {number} [opts.initCash=10000]
+ * @param {number} [opts.initCash=6000]
  * @param {Array}  [opts.stocks] 直接注入股票（测试用，绕过一切抽选）
  * @param {string[]} [opts.excludeSeasons] 排除的年景 id
  * @returns {object} 一局的完整配置（可直接交给 DataBus）
  */
 export function composeGame(opts = {}) {
   const turns = opts.turns || 12;
-  const initCash = typeof opts.initCash === 'number' ? opts.initCash : 10000;
+  const initCash = typeof opts.initCash === 'number' ? opts.initCash : 6000;
   const seedKey = opts.seedKey || makeSeedKey();
 
   // ---- 路径 1：直接注入股票（测试用，跳过抽选）----

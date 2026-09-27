@@ -89,7 +89,7 @@ export default class Main {
         return;
       }
       // ★ 判定时机 ③：开局资金够不够买一手。
-      //   菜单关卡的本金是 ¥10000，远高于任何一手成本，正常不会触发；
+      //   菜单关卡的本金是 ¥6000，高于最贵一手（¥3405），正常不会触发；
       //   但"进入下一关"走的是同一条判定（见 result.on('nextLevel')）。
       if (this.checkBankrupt('start')) return;
       // 开局即进入第 1 月
