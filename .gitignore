@@ -1,0 +1,19 @@
+# ---- 微信开发者工具 ----
+# project.private.config.json 是「个人/本机」配置（libVersion、调试开关、本地路径），
+# 官方约定不入库；project.config.json 才是团队共享的项目配置。
+project.private.config.json
+
+# ---- 本地备份 ----
+# 数据层/素材重构前的快照包，只在本机留档，不进仓库
+_backup_*/
+
+# ---- 依赖与编辑器 ----
+node_modules/
+.vscode/
+.idea/
+*.log
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
